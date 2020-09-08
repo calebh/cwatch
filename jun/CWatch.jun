@@ -16,10 +16,11 @@ fun randomCoord() = Vector:make([i32ToFloat(Random:random_(0, Arcada:displayWidt
 fun randomDir() = Vector:normalize(Vector:make([i32ToFloat(Random:random_(-100, 100)),
                                                 i32ToFloat(Random:random_(-100, 100))]))
 
-let redHsv = Color:hsv{h=0.0f; s=100.0f; v=100.0f}
-let blueHsv = Color:hsv{h=223.0f; s=84.0f; v=100.0f}
-let purpleHsv = Color:hsv{h=288.0f; s=94.0f; v=75.0f}
-let colors = list<Color:hsv;3>{data=[redHsv, blueHsv, purpleHsv]; length=3u32}
+//let redHsv = Color:hsv{h=0.0f; s=100.0f; v=100.0f}
+//let blueHsv = Color:hsv{h=223.0f; s=84.0f; v=100.0f}
+//let purpleHsv = Color:hsv{h=288.0f; s=94.0f; v=75.0f}
+//let colors = list<Color:hsv;3>{data=[redHsv, blueHsv, purpleHsv]; length=3u32}
+let colors = list<Color:rgb;3>{data=[Color:red, Color:blue, Color:green]; length=3u32}
 
 let colorState = ref (colors |> List:map(fn (c) -> (randomCoord(), randomDir()) end))
 
@@ -51,14 +52,13 @@ fun loop() = (
                 let scores = colorPos |> List:map(fn (pos) -> 1.0f / (1.0f + doubleToFloat(Vector:magnitude(Vector:subtract(pos, pixelP)))) end);
                 let scoresTotal = List:sum(scores);
                 let weights = scores |> List:map(fn (score) -> score / scoresTotal end);
-                let hsvColor =
+                let rgbColor =
                     List:zip(colors, weights) |>
                     List:foldl(fn (colorInfo, accum) -> (
-                        let (Color:hsv{h=h0; s=s0; v=v0}, weight) = colorInfo;
-                        let Color:hsv{h=ha; s=sa; v=va} = accum;
-                        Color:hsv{h=ha + weight * h0; s=sa + weight * s0; v=va + weight * v0}
-                    ) end, Color:hsv{h=0.0; s=0.0; v=0.0});
-                let rgbColor = Color:hsvToRgb(hsvColor);
+                        let (Color:rgb{r=r0; g=g0; b=b0}, weight : float) = colorInfo;
+                        let Color:rgb{r=ra; g=ga; b=ba} = accum;
+                        Color:rgb{r=ra + weight * r0; g=ga + weight * g0; b=ba + weight * b0}
+                    ) end, Color:rgb{r=0; g=0; b=0});
                 Gfx:drawPixel(x, y, rgbColor)
             ) end
         ) end
