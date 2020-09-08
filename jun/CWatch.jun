@@ -1,0 +1,66 @@
+module CWatch
+open(Prelude)
+
+fun setup() = (
+    Arcada:arcadaBegin();
+    Arcada:displayBegin();
+    Arcada:setBacklight(255u8)
+)
+
+let backgroundTimerState = Time:state()
+let backgroundUpdateInterval = 16u32
+let colorSpeed = 100.0f
+
+fun randomCoord() = Vector:make([i32ToFloat(Random:random_(0, Arcada:displayWidth())),
+                                 i32ToFloat(Random:random_(0, Arcada:displayHeight()))])
+fun randomDir() = Vector:normalize(Vector:make([i32ToFloat(Random:random_(-100, 100)),
+                                                i32ToFloat(Random:random_(-100, 100))]))
+
+let redHsv = Color:hsv{h=0.0f; s=100.0f; v=100.0f}
+let blueHsv = Color:hsv{h=223.0f; s=84.0f; v=100.0f}
+let purpleHsv = Color:hsv{h=288.0f; s=94.0f; v=75.0f}
+let colors = list<Color:hsv;3>{data=[redHsv, blueHsv, purpleHsv]; length=3u32}
+
+let colorState = ref (colors |> List:map(fn (c) -> (randomCoord(), randomDir()) end))
+
+fun updateColor(colorInfo) = (
+    let (pos, dir) = colorInfo;
+    let delta = Vector:scale(colorSpeed, dir);
+    let posPrime = Vector:add(pos, delta);
+    let xPrime = Vector:get(Vector:x, posPrime);
+    let yPrime = Vector:get(Vector:y, posPrime);
+    let xPrimePrime : float = Math:fmod_(xPrime + Arcada:displayWidth(), Arcada:displayWidth());
+    let yPrimePrime : float = Math:fmod_(yPrime + Arcada:displayHeight(), Arcada:displayHeight());
+    (Vector:make([xPrimePrime, yPrimePrime]), dir)
+)
+
+fun loop() = (
+    let colorInfosSig =
+        Time:every(backgroundUpdateInterval, backgroundTimerState) |>
+        Signal:foldP(fn (time, colorInfos) ->
+            colorInfos |> List:map(updateColor)
+        end, colorState);
+    Signal:latch(colorInfosSig, colorState) |>
+    Signal:map(fn (colorInfos) -> (colorInfos |> List:map(fst)) end) |>
+    Signal:sink(fn (colorPos) ->
+        for y : uint16 in 0 to Arcada:displayHeight() - 1 do (
+            let yf = u16ToFloat(y);
+            for x : uint16 in 0 to Arcada:displayHeight() - 1 do (
+                let xf = u16ToFloat(x);
+                let pixelP = Vector:make([xf, yf]);
+                let scores = colorPos |> List:map(fn (pos) -> 1.0f / (1.0f + doubleToFloat(Vector:magnitude(Vector:subtract(pos, pixelP)))) end);
+                let scoresTotal = List:sum(scores);
+                let weights = scores |> List:map(fn (score) -> score / scoresTotal end);
+                let hsvColor =
+                    List:zip(colors, weights) |>
+                    List:foldl(fn (colorInfo, accum) -> (
+                        let (Color:hsv{h=h0; s=s0; v=v0}, weight) = colorInfo;
+                        let Color:hsv{h=ha; s=sa; v=va} = accum;
+                        Color:hsv{h=ha + weight * h0; s=sa + weight * s0; v=va + weight * v0}
+                    ) end, Color:hsv{h=0.0; s=0.0; v=0.0});
+                let rgbColor = Color:hsvToRgb(hsvColor);
+                Gfx:drawPixel(x, y, rgbColor)
+            ) end
+        ) end
+    end)
+)

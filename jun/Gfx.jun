@@ -1,0 +1,13 @@
+module Gfx
+open(Prelude, Arcada, Color)
+include("<Adafruit_GFX.h>")
+
+fun fillScreen(c : rgb) = (
+    let cPrime = rgbToRgb565(c);
+    #arcada.display->fillScreen(cPrime);#
+)
+
+fun drawPixel(x : uint16, y : uint16, c : rgb) = (
+    let cPrime = rgbToRgb565(c);
+    #arcada.display->drawPixel(x, y, cPrime);#
+)

@@ -1,0 +1,29 @@
+module Arcada
+open(Prelude)
+include("\"Adafruit_Arcada.h\"")
+
+#
+Adafruit_Arcada arcada;
+#
+
+fun arcadaBegin() = (
+    let mutable ret = false;
+    #ret = arcada.arcadaBegin();#;
+    ret
+)
+
+fun displayBegin() = #arcada.displayBegin();#
+
+fun setBacklight(level : uint8) = #arcada.setBacklight(level);#
+
+fun displayWidth() : uint16 = (
+    let mutable w : uint16 = 0u16;
+    #w = arcada.display->width();#;
+    w
+)
+
+fun displayHeight() : uint16 = (
+    let mutable h : uint16 = 0u16;
+    #h = arcada.display->width();#;
+    h
+)
