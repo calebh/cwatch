@@ -4,63 +4,25 @@ open(Prelude)
 fun setup() = (
     Arcada:arcadaBegin();
     Arcada:displayBegin();
-    Arcada:setBacklight(255u8)
+    Arcada:setBacklight(255u8);
+    Arcada:createDoubleBuffer()
 )
 
-let backgroundTimerState = Time:state()
-let backgroundUpdateInterval = 16u32
-let colorSpeed = 100.0f
-
-fun randomCoord() = Vector:make([i32ToFloat(Random:random_(0, Arcada:displayWidth())),
-                                 i32ToFloat(Random:random_(0, Arcada:displayHeight()))])
-fun randomDir() = Vector:normalize(Vector:make([i32ToFloat(Random:random_(-100, 100)),
-                                                i32ToFloat(Random:random_(-100, 100))]))
-
-//let redHsv = Color:hsv{h=0.0f; s=100.0f; v=100.0f}
-//let blueHsv = Color:hsv{h=223.0f; s=84.0f; v=100.0f}
-//let purpleHsv = Color:hsv{h=288.0f; s=94.0f; v=75.0f}
-//let colors = list<Color:hsv;3>{data=[redHsv, blueHsv, purpleHsv]; length=3u32}
-let colors = list<Color:rgb;3>{data=[Color:red, Color:blue, Color:green]; length=3u32}
-
-let colorState = ref (colors |> List:map(fn (c) -> (randomCoord(), randomDir()) end))
-
-fun updateColor(colorInfo) = (
-    let (pos, dir) = colorInfo;
-    let delta = Vector:scale(colorSpeed, dir);
-    let posPrime = Vector:add(pos, delta);
-    let xPrime = Vector:get(Vector:x, posPrime);
-    let yPrime = Vector:get(Vector:y, posPrime);
-    let xPrimePrime : float = Math:fmod_(xPrime + Arcada:displayWidth(), Arcada:displayWidth());
-    let yPrimePrime : float = Math:fmod_(yPrime + Arcada:displayHeight(), Arcada:displayHeight());
-    (Vector:make([xPrimePrime, yPrimePrime]), dir)
-)
+let pink = Color:rgb{r=0xFCu8; g=0x5Cu8; b=0x7Du8}
+let purpleBlue = Color:rgb{r=0x6Au8; g=0x82u8; b=0xFBu8}
 
 fun loop() = (
-    let colorInfosSig =
-        Time:every(backgroundUpdateInterval, backgroundTimerState) |>
-        Signal:foldP(fn (time, colorInfos) ->
-            colorInfos |> List:map(updateColor)
-        end, colorState);
-    Signal:latch(colorInfosSig, colorState) |>
-    Signal:map(fn (colorInfos) -> (colorInfos |> List:map(fst)) end) |>
-    Signal:sink(fn (colorPos) ->
-        for y : uint16 in 0 to Arcada:displayHeight() - 1 do (
-            let yf = u16ToFloat(y);
-            for x : uint16 in 0 to Arcada:displayHeight() - 1 do (
-                let xf = u16ToFloat(x);
-                let pixelP = Vector:make([xf, yf]);
-                let scores = colorPos |> List:map(fn (pos) -> 1.0f / (1.0f + doubleToFloat(Vector:magnitude(Vector:subtract(pos, pixelP)))) end);
-                let scoresTotal = List:sum(scores);
-                let weights = scores |> List:map(fn (score) -> score / scoresTotal end);
-                let rgbColor =
-                    List:zip(colors, weights) |>
-                    List:foldl(fn (colorInfo, accum) -> (
-                        let (Color:rgb{r=r0; g=g0; b=b0}, weight : float) = colorInfo;
-                        let Color:rgb{r=ra; g=ga; b=ba} = accum;
-                        Color:rgb{r=ra + weight * r0; g=ga + weight * g0; b=ba + weight * b0}
-                    ) end, Color:rgb{r=0; g=0; b=0});
-                Gfx:drawPixel(x, y, rgbColor)
-            ) end
-        ) end
-    end)
+    Gfx:drawVerticalGradient(0u16, 0u16, Arcada:displayWidth(), Arcada:displayHeight(), pink, purpleBlue);
+    Gfx:setTextSize(5);
+    Gfx:setTextColor(Color:white);
+    let time = '12:59';
+    let ampm = 'AM';
+    let (_, _, w, h) = Gfx:getCharListBounds(0, 0, time);
+    Gfx:setCursor((Arcada:displayWidth() / 2) - (w / 2), (Arcada:displayHeight() / 2) - (h / 2));
+    Gfx:printCharList(time);
+    Gfx:setTextSize(2);
+    let (_, _, w2, _) = Gfx:getCharListBounds(0, 0, ampm);
+    Gfx:setCursor((Arcada:displayWidth() / 2) - (w2 / 2), (Arcada:displayHeight() / 2) + (h / 2) + 2);
+    Gfx:printCharList(ampm);
+    Arcada:blitDoubleBuffer()
 )

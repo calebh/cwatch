@@ -27,3 +27,17 @@ fun displayHeight() : uint16 = (
     #h = arcada.display->width();#;
     h
 )
+
+fun createDoubleBuffer() : bool = (
+    let w = displayWidth();
+    let h = displayHeight();
+    let ret = true;
+    #ret = arcada.createFrameBuffer(w, h);#;
+    ret
+)
+
+fun blitDoubleBuffer() : bool = (
+    let ret = true;
+    #ret = arcada.blitFrameBuffer(0, 0, true, false);#;
+    ret
+)
