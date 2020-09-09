@@ -11,18 +11,201 @@ fun setup() = (
 let pink = Color:rgb{r=0xFCu8; g=0x5Cu8; b=0x7Du8}
 let purpleBlue = Color:rgb{r=0x6Au8; g=0x82u8; b=0xFBu8}
 
+type month = january | february | march | april | may | june | july | august | september | october | november | december
+
+type dayOfWeek = sunday | monday | tuesday | wednesday | thursday | friday | saturday
+
+type datetime = { month : month; day : uint8; year : uint32; hours : uint8; minutes : uint8; seconds : uint8; dayOfWeek : dayOfWeek }
+
+fun isLeapYear(y : uint32) =
+    if y mod 4 != 0 then
+        false
+    elif y mod 100 != 0 then
+        true
+    elif y mod 400 == 0 then
+        true
+    else
+        false
+    end
+
+fun daysInMonth(y : uint32, m : month) =
+    case m of
+    | january() => 31u8
+    | february() =>
+        if isLeapYear(y) then
+            29u8
+        else
+            28u8
+        end
+    | march() => 31u8
+    | april() => 30u8
+    | may() => 31u8
+    | june() => 30u8
+    | july() => 31u8
+    | august() => 31u8
+    | september() => 30u8
+    | october() => 31u8
+    | november() => 30u8
+    | december() => 31u8
+    end
+
+fun nextMonth(m : month) =
+    case m of
+    | january() => february()
+    | february() => march()
+    | march() => april()
+    | may() => june()
+    | june() => july()
+    | august() => august()
+    | september() => october()
+    | october() => november()
+    | december() => january()
+    end
+
+fun nextDayOfWeek(dw) =
+    case dw of
+    | sunday() => monday()
+    | monday() => tuesday()
+    | tuesday() => wednesday()
+    | wednesday() => thursday()
+    | thursday() => friday()
+    | friday() => saturday()
+    | saturday() => sunday()
+    end
+
+fun dayOfWeekToCharList(dw : dayOfWeek) =
+    case dw of
+    | sunday() => 'Sun'
+    | monday() => 'Mon'
+    | tuesday() => 'Tue'
+    | wednesday() => 'Wed'
+    | thursday() => 'Thu'
+    | friday() => 'Fri'
+    | saturday() => 'Sat'
+    end
+
+fun monthToCharList(m : month) =
+    case m of
+    | january() => 'Jan'
+    | february() => 'Feb'
+    | march() => 'Mar'
+    | april() => 'Apr'
+    | may() => 'May'
+    | june() => 'Jun'
+    | july() => 'Jul'
+    | august() => 'Aug'
+    | september() => 'Sep'
+    | october() => 'Oct'
+    | november() => 'Nov'
+    | december() => 'Dec'
+    end
+
+fun secondTick(d) = (
+    let datetime {month=month; day=day; year=year; hours=hours; minutes=minutes; seconds=seconds; dayOfWeek=dayOfWeek} = d;
+    let seconds1 = seconds + 1u8;
+    let (seconds2, minutes1) =
+        if seconds1 == 60u8 then
+            (0u8, minutes + 1u8)
+        else
+            (seconds1, minutes)
+        end;
+    let (minutes2, hours1) =
+        if minutes1 == 60u8 then
+            (0u8, hours + 1u8)
+        else
+            (minutes1, hours)
+        end;
+    let (hours2, day1, dayOfWeek2) =
+        if hours1 == 24u8 then
+            (0u8, day + 1u8, nextDayOfWeek(dayOfWeek))
+        else
+            (hours1, day, dayOfWeek)
+        end;
+    let daysInCurrentMonth = daysInMonth(year, month);
+    let (day2, (month2, year2)) =
+        if day1 > daysInCurrentMonth then
+            (
+                1u8,
+                case month of
+                | december() =>
+                    (january(), year + 1u8)
+                | _ =>
+                    (nextMonth(month), year)
+                end
+            )
+        else
+            (day1, (month, year))
+        end;
+    datetime {month=month2; day=day2; year=year2; hours=hours2; minutes=minutes2; seconds=seconds2; dayOfWeek=dayOfWeek2}
+)
+
+let clockTickerState = Time:state()
+let clockState = ref datetime {month=september(); day=8; year=2020; hours=22; minutes=40; seconds=0; dayOfWeek=tuesday()}
+
 fun loop() = (
     Gfx:drawVerticalGradient(0u16, 0u16, Arcada:displayWidth(), Arcada:displayHeight(), pink, purpleBlue);
-    Gfx:setTextSize(5);
-    Gfx:setTextColor(Color:white);
-    let time = '12:59';
-    let ampm = 'AM';
-    let (_, _, w, h) = Gfx:getCharListBounds(0, 0, time);
-    Gfx:setCursor((Arcada:displayWidth() / 2) - (w / 2), (Arcada:displayHeight() / 2) - (h / 2));
-    Gfx:printCharList(time);
-    Gfx:setTextSize(2);
-    let (_, _, w2, _) = Gfx:getCharListBounds(0, 0, ampm);
-    Gfx:setCursor((Arcada:displayWidth() / 2) - (w2 / 2), (Arcada:displayHeight() / 2) + (h / 2) + 2);
-    Gfx:printCharList(ampm);
+
+    Time:every(1000u32, clockTickerState) |>
+    Signal:foldP(fn (t, dt) -> secondTick(dt) end, clockState) |>
+    Signal:latch(clockState) |>
+    Signal:sink(fn (dt) -> (
+        
+        let datetime {month=month; day=day; year=year; hours=hours; minutes=minutes; seconds=seconds; dayOfWeek=dayOfWeek} = dt;
+
+        let displayHours : int32 =
+            if hours == 0u8 then
+                12u8
+            elif hours > 12u8 then
+                hours - 12u8
+            else
+                hours
+            end;
+
+        Gfx:setTextColor(Color:white);
+
+        Gfx:setTextSize(5);
+        
+        let timeHourStr = CharList:i32ToCharList<;6>(displayHours);
+        let timeHourStrColon = CharList:concat<;6,2,6>(timeHourStr, ':');
+        let minutesStr =
+            if minutes < 10 then
+                CharList:concat<;2,6,6>('0', CharList:i32ToCharList<;6>(minutes))
+            else
+                CharList:i32ToCharList<;6>(minutes)
+            end;
+        let timeStr = CharList:concat<;6,6,6>(timeHourStrColon, minutesStr);
+
+        let (_, _, w, h) = Gfx:getCharListBounds(0, 0, timeStr);
+        Gfx:setCursor((Arcada:displayWidth() / 2) - (w / 2), (Arcada:displayHeight() / 2) - (h / 2));
+        
+        Gfx:printCharList(timeStr);
+
+        let ampm =
+            if hours < 12 then
+                'AM'
+            else
+                'PM'
+            end;
+        
+        Gfx:setTextSize(2);
+        let (_, _, w2, _) = Gfx:getCharListBounds(0, 0, ampm);
+        Gfx:setCursor((Arcada:displayWidth() / 2) - (w2 / 2), (Arcada:displayHeight() / 2) + (h / 2) + 2);
+        Gfx:printCharList(ampm);
+
+        // Example: Sun Apr 31, 2020
+        let dwSpace = CharList:concat<;4,2,5>(dayOfWeekToCharList(dayOfWeek), ' ');
+        let dwSpaceMon = CharList:concat<;5,4,8>(dwSpace, monthToCharList(month));
+        let dwSpaceMonSpace = CharList:concat<;8,2,9>(dwSpaceMon, ' ');
+        let dayStr = CharList:i32ToCharList<;3>(day);
+        let dwSpaceMonSpaceDay = CharList:concat<;9,3,11>(dwSpaceMonSpace, dayStr);
+        let dwSpaceMonSpaceDayCommaSpace = CharList:concat<;11,3,13>(dwSpaceMonSpaceDay, ', ');
+        let yearStr = CharList:i32ToCharList<;8>(year);
+        let dateStr = CharList:concat<;13,8,20>(dwSpaceMonSpaceDayCommaSpace, yearStr);
+
+        let (_, _, w3, h3) = Gfx:getCharListBounds(0, 0, dateStr);
+        Gfx:setCursor((Arcada:displayWidth() / 2) - (w3 / 2), (Arcada:displayHeight() / 2) - (h / 2) - 3 * h3);
+        Gfx:printCharList(dateStr)
+    ) end);
+
     Arcada:blitDoubleBuffer()
 )

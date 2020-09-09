@@ -23,6 +23,20 @@ fun printCharList<;n>(cl : list<uint8; n>) =
 fun printString(s : string) =
     #arcada.getCanvas()->print(s);#
 
+type align = centerHorizontally | centerVertically | centerBoth
+
+fun centerCursor<;n>(x : int16, y : int16, align : align, cl : list<uint8; n>) = (
+    let (_, _, w, h) = Gfx:getCharListBounds(0, 0, cl);
+    case align of
+    | centerHorizontally() => 
+        Gfx:setCursor(x - (w / 2), y)
+    | centerVertically() =>
+        Gfx:setCursor(x, y - (h / 2))
+    | centerBoth() =>
+        Gfx:setCursor(x - (w / 2), y - (h / 2))
+    end
+)
+
 fun setCursor(x : int16, y : int16) = #arcada.getCanvas()->setCursor(x, y);#
 
 fun setTextColor(c : rgb) = (
