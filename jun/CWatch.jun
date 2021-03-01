@@ -1,11 +1,59 @@
 module CWatch
 open(Prelude)
+include("<bluefruit.h>")
+
+#
+BLEUuid timeUuid(UUID16_SVC_CURRENT_TIME);
+BLEService rawTimeService(timeUuid);
+
+BLEUuid dayDateTimeUuid(UUID16_CHR_DAY_DATE_TIME);
+BLECharacteristic rawDayDateTimeCharacterstic(dayDateTimeUuid);
+
+BLEUuid dayOfWeekUuid(UUID16_CHR_DAY_OF_WEEK);
+BLECharacteristic rawDayOfWeek(dayOfWeekUuid);
+#
+
+type dayDateTimeBLE = packed { month : uint8; day : uint8; year : uint32; hours : uint8; minutes : uint8; seconds : uint8 }
+
+let timeService = (
+    var p : rawpointer;
+    #p = (void *) &rawTimeService;#;
+    Ble:service(p)
+)
+
+let dayDateTimeCharacterstic = (
+    var p : rawpointer;
+    #p = (void *) &rawDayDateTimeCharacterstic;#;
+    Ble:characterstic(p)
+)
+
+let dayOfWeekCharacterstic = (
+    var p : rawpointer;
+    #p = (void *) &rawDayOfWeek;#;
+    Ble:characterstic(p)
+)
 
 fun setup() = (
     Arcada:arcadaBegin();
     Arcada:displayBegin();
     Arcada:setBacklight(255u8);
-    Arcada:createDoubleBuffer()
+    Arcada:createDoubleBuffer();
+    Ble:bluefruitBegin();
+    Ble:bluefruitPeriphSetConnInterval(9u16, 16u16);
+    Ble:bluefruitSetTxPower(4i8);
+    Ble:bluefruitSetName("CWatch");
+    Ble:beginService(timeService);
+    Ble:beginCharacterstic(dayDateTimeCharacterstic);
+    Ble:beginCharacterstic(dayOfWeekCharacterstic);
+    Ble:bluefruitAdvertisingAddFlags(Ble:bleGapAdvFlagsLeOnlyGeneralDiscMode);
+    Ble:bluefruitAdvertisingAddTxPower();
+    Ble:bluefruitAdvertisingAddAppearance(Ble:appearanceGenericWatch);
+    Ble:bluefruitAdvertisingAddService(timeService);
+    Ble:bluefruitAdvertisingAddName();
+    Ble:bluefruitAdvertisingRestartOnDisconnect(true);
+    Ble:bluefruitAdvertisingSetInterval(32u16, 244u16);
+    Ble:bluefruitAdvertisingSetFastTimeout(30u16);
+    Ble:bluefruitAdvertisingStart(0u16)
 )
 
 let pink = Color:rgb{r=0xFCu8; g=0x5Cu8; b=0x7Du8}
@@ -140,7 +188,7 @@ fun secondTick(d) = (
 )
 
 let clockTickerState = Time:state()
-let clockState = ref datetime {month=september(); day=8; year=2020; hours=22; minutes=40; seconds=0; dayOfWeek=tuesday()}
+let clockState = ref datetime {month=september(); day=9; year=2020; hours=18; minutes=40; seconds=0; dayOfWeek=wednesday()}
 
 fun loop() = (
     Gfx:drawVerticalGradient(0u16, 0u16, Arcada:displayWidth(), Arcada:displayHeight(), pink, purpleBlue);
@@ -149,9 +197,9 @@ fun loop() = (
     Signal:foldP(fn (t, dt) -> secondTick(dt) end, clockState) |>
     Signal:latch(clockState) |>
     Signal:sink(fn (dt) -> (
-        
         let datetime {month=month; day=day; year=year; hours=hours; minutes=minutes; seconds=seconds; dayOfWeek=dayOfWeek} = dt;
 
+        // Convert 24 hour format to 12 hour format
         let displayHours : int32 =
             if hours == 0u8 then
                 12u8
@@ -163,23 +211,31 @@ fun loop() = (
 
         Gfx:setTextColor(Color:white);
 
-        Gfx:setTextSize(5);
+        Gfx:setFont(Gfx:freeSans24());
+        Gfx:setTextSize(1);
         
-        let timeHourStr = CharList:i32ToCharList<;6>(displayHours);
-        let timeHourStrColon = CharList:concat<;6,2,6>(timeHourStr, ':');
+        // Construct the hours:minutes string
+        let timeHourStr = CharList:i32ToCharList<;2>(displayHours);
+        let timeHourStrColon = CharList:safeConcat(timeHourStr, ':');
         let minutesStr =
             if minutes < 10 then
-                CharList:concat<;2,6,6>('0', CharList:i32ToCharList<;6>(minutes))
+                CharList:safeConcat('0', CharList:i32ToCharList<;1>(minutes))
             else
-                CharList:i32ToCharList<;6>(minutes)
+                CharList:i32ToCharList<;2>(minutes)
             end;
-        let timeStr = CharList:concat<;6,6,6>(timeHourStrColon, minutesStr);
+        let timeStr = CharList:safeConcat(timeHourStrColon, minutesStr);
 
+        // Move the cursor to the center of the screen
         let (_, _, w, h) = Gfx:getCharListBounds(0, 0, timeStr);
-        Gfx:setCursor((Arcada:displayWidth() / 2) - (w / 2), (Arcada:displayHeight() / 2) - (h / 2));
+        Gfx:setCursor((Arcada:displayWidth() / 2) - (w / 2), (Arcada:displayHeight() / 2) + (h / 2));
         
+        // Print the time
         Gfx:printCharList(timeStr);
 
+        Gfx:setTextSize(1);
+        Gfx:setFont(Gfx:freeSans9());
+
+        // Determine if we are in AM or PM
         let ampm =
             if hours < 12 then
                 'AM'
@@ -187,23 +243,26 @@ fun loop() = (
                 'PM'
             end;
         
-        Gfx:setTextSize(2);
-        let (_, _, w2, _) = Gfx:getCharListBounds(0, 0, ampm);
-        Gfx:setCursor((Arcada:displayWidth() / 2) - (w2 / 2), (Arcada:displayHeight() / 2) + (h / 2) + 2);
+        // Print the AM or PM
+        let (_, _, w2, h2) = Gfx:getCharListBounds(0, 0, ampm);
+        Gfx:setCursor((Arcada:displayWidth() / 2) - (w2 / 2), (Arcada:displayHeight() / 2) + (h / 2) + h2 + 5);
         Gfx:printCharList(ampm);
 
-        // Example: Sun Apr 31, 2020
-        let dwSpace = CharList:concat<;4,2,5>(dayOfWeekToCharList(dayOfWeek), ' ');
-        let dwSpaceMon = CharList:concat<;5,4,8>(dwSpace, monthToCharList(month));
-        let dwSpaceMonSpace = CharList:concat<;8,2,9>(dwSpaceMon, ' ');
-        let dayStr = CharList:i32ToCharList<;3>(day);
-        let dwSpaceMonSpaceDay = CharList:concat<;9,3,11>(dwSpaceMonSpace, dayStr);
-        let dwSpaceMonSpaceDayCommaSpace = CharList:concat<;11,3,13>(dwSpaceMonSpaceDay, ', ');
-        let yearStr = CharList:i32ToCharList<;8>(year);
-        let dateStr = CharList:concat<;13,8,20>(dwSpaceMonSpaceDayCommaSpace, yearStr);
+        // Construct the day of week, month day string
+        // Example: Sun Apr 31
+        let dateStr =
+            CharList:safeConcat(
+            CharList:safeConcat(
+            CharList:safeConcat(
+            CharList:safeConcat(
+                dayOfWeekToCharList(dayOfWeek), ', '),
+                monthToCharList(month)),
+                ' '),
+                CharList:i32ToCharList<;2>(day));
 
+        // Draw the day string above the time
         let (_, _, w3, h3) = Gfx:getCharListBounds(0, 0, dateStr);
-        Gfx:setCursor((Arcada:displayWidth() / 2) - (w3 / 2), (Arcada:displayHeight() / 2) - (h / 2) - 3 * h3);
+        Gfx:setCursor((Arcada:displayWidth() / 2) - (w3 / 2), (Arcada:displayHeight() / 2) - (h / 2) - 5);
         Gfx:printCharList(dateStr)
     ) end);
 

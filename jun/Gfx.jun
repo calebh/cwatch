@@ -1,6 +1,15 @@
 module Gfx
 open(Prelude, Arcada, Color)
-include("<Adafruit_GFX.h>")
+include("<Adafruit_GFX.h>", "<Fonts/FreeSans9pt7b.h>", "<Fonts/FreeSans24pt7b.h>")
+
+type font = defaultFont | freeSans9 | freeSans24
+
+fun setFont(f : font) =
+    case f of
+    | defaultFont() => #arcada.getCanvas()->setFont();#
+    | freeSans9() => #arcada.getCanvas()->setFont(&FreeSans9pt7b);#
+    | freeSans24() => #arcada.getCanvas()->setFont(&FreeSans24pt7b);#
+    end
 
 fun fillScreen(c : rgb) = (
     let cPrime = rgbToRgb565(c);
