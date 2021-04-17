@@ -1,12 +1,14 @@
 module Ble
 open(Prelude)
-include("<bluefruit.h>")
+include("<bluefruit.h>", "<bluefruit_common.h>")
 
-type servicet = service of rawpointer
-type characterstict = characterstic of rawpointer
+type servicet = service(rawpointer)
+type characterstict = characterstic(rawpointer)
 
-type advertisingFlagt = advertisingFlag of uint8
-type appearancet = appearance of uint16
+type advertisingFlagt = advertisingFlag(uint8)
+type appearancet = appearance(uint16)
+type secureModet = secureMode(uint16)
+type propertiest = properties(uint8)
 
 let bleGapAdvFlagLeLimitedDiscMode = (
     var n : uint8;
@@ -344,18 +346,92 @@ let appearanceOutdoorSportsActLocAndNavPod = (
     appearance(n)
 )
 
+let secModeNoAccess = (
+    var n : uint16;
+    #n = (uint16_t) SECMODE_NO_ACCESS;#;
+    secureMode(n)
+)
+
+let secModeOpen = (
+    var n : uint16;
+    #n = (uint16_t) SECMODE_OPEN;#;
+    secureMode(n)
+)
+
+let secModeEncNoMITM = (
+    var n : uint16;
+    #n = (uint16_t) SECMODE_ENC_NO_MITM;#;
+    secureMode(n)
+)
+
+let secModeEncWithMITM = (
+    var n : uint16;
+    #n = (uint16_t) SECMODE_ENC_WITH_MITM;#;
+    secureMode(n)
+)
+
+let secModeSignedNoMITM = (
+    var n : uint16;
+    #n = (uint16_t) SECMODE_SIGNED_NO_MITM;#;
+    secureMode(n)
+)
+
+let secModeSignedWithMITM = (
+    var n : uint16;
+    #n = (uint16_t) SECMODE_SIGNED_WITH_MITM;#;
+    secureMode(n)
+)
+
+let propertiesBroadcast = (
+    var n : uint8;
+    #n = (uint8_t) CHR_PROPS_BROADCAST;#;
+    properties(n)
+)
+
+let propertiesRead = (
+    var n : uint8;
+    #n = (uint8_t) CHR_PROPS_READ;#;
+    properties(n)
+)
+
+let propertiesWriteWoResp = (
+    var n : uint8;
+    #n = (uint8_t) CHR_PROPS_WRITE_WO_RESP;#;
+    properties(n)
+)
+
+let propertiesWrite = (
+    var n : uint8;
+    #n = (uint8_t) CHR_PROPS_WRITE;#;
+    properties(n)
+)
+
+let propertiesNotify = (
+    var n : uint8;
+    #n = (uint8_t) CHR_PROPS_NOTIFY;#;
+    properties(n)
+)
+
+let propertiesIndicate = (
+    var n : uint8;
+    #n = (uint8_t) CHR_PROPS_INDICATE;#;
+    properties(n)
+)
+
+// Service functions
 fun beginService(s) = (
     let service(p) = s;
     #((BLEService *) p)->begin();#
 )
 
+// Characteristic functions
 fun beginCharacterstic(c) = (
     let characterstic(p) = c;
     #((BLECharacteristic *) p)->begin();#
 )
 
 fun writeCharactersticBytes<;n>(c, bytes : list<uint8; n>) = (
-    let list { data = data; length=length } = bytes;
+    let { data = data; length=length } = bytes;
     let characterstic(p) = c;
     let mutable ret : uint16 = 0u16;
     #ret = ((BLECharacteristic *) p)->write((void *) &data[0], length);#;
@@ -402,6 +478,24 @@ fun readGeneric<'t>(c) = (
     var ret : 't;
     #((BLECharacteristic *) p)->read((void *) &ret, sizeof(t));#;
     ret
+)
+
+fun setCharacteristicPermission(c, readPermission, writePermission) = (
+    let secureMode(readN) = readPermission;
+    let secureMode(writeN) = writePermission;
+    let characterstic(p) = c;
+    #((BLECharacteristic *) p)->setPermission((BleSecurityMode) readN, (BleSecurityMode) writeN);#
+)
+
+fun setCharacteristicProperties(c, prop) = (
+    let properties(propN) = prop;
+    let characterstic(p) = c;
+    #((BLECharacteristic *) p)->setProperties(propN);#
+)
+
+fun setCharacteristicFixedLen<'t>(c) = (
+    let characterstic(p) = c;
+    #((BLECharacteristic *) p)->setFixedLen(sizeof(t));#
 )
 
 // Bluefruit top level functions

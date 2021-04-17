@@ -6,14 +6,23 @@ include("<bluefruit.h>")
 BLEUuid timeUuid(UUID16_SVC_CURRENT_TIME);
 BLEService rawTimeService(timeUuid);
 
+bool rawHasNewDayDateTime = false;
 BLEUuid dayDateTimeUuid(UUID16_CHR_DAY_DATE_TIME);
 BLECharacteristic rawDayDateTimeCharacterstic(dayDateTimeUuid);
+void onWriteDayDateTime(uint16_t conn_hdl, BLECharacteristic* chr, uint8_t* data, uint16_t len) {
+    rawHasNewDayDateTime = true;
+}
 
+bool rawHasNewDayOfWeek = false;
 BLEUuid dayOfWeekUuid(UUID16_CHR_DAY_OF_WEEK);
 BLECharacteristic rawDayOfWeek(dayOfWeekUuid);
+void onWriteDayOfWeek(uint16_t conn_hdl, BLECharacteristic* chr, uint8_t* data, uint16_t len) {
+    rawHasNewDayOfWeek = true;
+}
 #
 
-type dayDateTimeBLE = packed { month : uint8; day : uint8; year : uint32; hours : uint8; minutes : uint8; seconds : uint8 }
+alias dayDateTimeBLE = packed { month : uint8; day : uint8; year : uint32; hours : uint8; minutes : uint8; seconds : uint8 }
+alias dayOfWeekBLE = packed { dayOfWeek : uint8 }
 
 let timeService = (
     var p : rawpointer;
@@ -42,9 +51,19 @@ fun setup() = (
     Ble:bluefruitPeriphSetConnInterval(9u16, 16u16);
     Ble:bluefruitSetTxPower(4i8);
     Ble:bluefruitSetName("CWatch");
+    Ble:setCharacteristicProperties(dayDateTimeCharacterstic, Ble:propertiesWrite);
+    Ble:setCharacteristicProperties(dayOfWeekCharacterstic, Ble:propertiesWrite);
+    Ble:setCharacteristicPermission(dayDateTimeCharacterstic, Ble:secModeNoAccess, Ble:secModeOpen);
+    Ble:setCharacteristicPermission(dayOfWeekCharacterstic, Ble:secModeNoAccess, Ble:secModeOpen);
     Ble:beginService(timeService);
     Ble:beginCharacterstic(dayDateTimeCharacterstic);
     Ble:beginCharacterstic(dayOfWeekCharacterstic);
+    Ble:setCharacteristicFixedLen<dayDateTimeBLE>(dayDateTimeCharacterstic);
+    Ble:setCharacteristicFixedLen<dayOfWeekBLE>(dayOfWeekCharacterstic);
+    #
+    rawDayDateTimeCharacterstic.setWriteCallback(onWriteDayDateTime);
+    rawDayOfWeek.setWriteCallback(onWriteDayOfWeek);
+    #;
     Ble:bluefruitAdvertisingAddFlags(Ble:bleGapAdvFlagsLeOnlyGeneralDiscMode);
     Ble:bluefruitAdvertisingAddTxPower();
     Ble:bluefruitAdvertisingAddAppearance(Ble:appearanceGenericWatch);
@@ -56,14 +75,14 @@ fun setup() = (
     Ble:bluefruitAdvertisingStart(0u16)
 )
 
-let pink = Color:rgb{r=0xFCu8; g=0x5Cu8; b=0x7Du8}
-let purpleBlue = Color:rgb{r=0x6Au8; g=0x82u8; b=0xFBu8}
+let pink : Color:rgb = {r=0xFCu8; g=0x5Cu8; b=0x7Du8}
+let purpleBlue : Color:rgb = {r=0x6Au8; g=0x82u8; b=0xFBu8}
 
-type month = january | february | march | april | may | june | july | august | september | october | november | december
+type month = january() | february() | march() | april() | may() | june() | july() | august() | september() | october() | november() | december()
 
-type dayOfWeek = sunday | monday | tuesday | wednesday | thursday | friday | saturday
+type dayOfWeek = sunday() | monday() | tuesday() | wednesday() | thursday() | friday() | saturday()
 
-type datetime = { month : month; day : uint8; year : uint32; hours : uint8; minutes : uint8; seconds : uint8; dayOfWeek : dayOfWeek }
+alias datetime = { month : month; day : uint8; year : uint32; hours : uint8; minutes : uint8; seconds : uint8; dayOfWeek : dayOfWeek }
 
 fun isLeapYear(y : uint32) =
     if y mod 4 != 0 then
@@ -148,8 +167,8 @@ fun monthToCharList(m : month) =
     | december() => 'Dec'
     end
 
-fun secondTick(d) = (
-    let datetime {month=month; day=day; year=year; hours=hours; minutes=minutes; seconds=seconds; dayOfWeek=dayOfWeek} = d;
+fun secondTick(d : datetime) = (
+    let {month=month; day=day; year=year; hours=hours; minutes=minutes; seconds=seconds; dayOfWeek=dayOfWeek} = d;
     let seconds1 = seconds + 1u8;
     let (seconds2, minutes1) =
         if seconds1 == 60u8 then
@@ -176,7 +195,7 @@ fun secondTick(d) = (
                 1u8,
                 case month of
                 | december() =>
-                    (january(), year + 1u8)
+                    (january(), year + 1u32)
                 | _ =>
                     (nextMonth(month), year)
                 end
@@ -184,30 +203,100 @@ fun secondTick(d) = (
         else
             (day1, (month, year))
         end;
-    datetime {month=month2; day=day2; year=year2; hours=hours2; minutes=minutes2; seconds=seconds2; dayOfWeek=dayOfWeek2}
+    {month=month2; day=day2; year=year2; hours=hours2; minutes=minutes2; seconds=seconds2; dayOfWeek=dayOfWeek2}
 )
 
 let clockTickerState = Time:state()
-let clockState = ref datetime {month=september(); day=9; year=2020; hours=18; minutes=40; seconds=0; dayOfWeek=wednesday()}
+let clockState = ref ({month=september(); day=9; year=2020; hours=18; minutes=40; seconds=0; dayOfWeek=wednesday()} : datetime)
+
+fun processBluetoothUpdates() = (
+    let mutable hasNewDayDateTime = false;
+    let mutable hasNewDayOfWeek = false;
+    #
+    hasNewDayDateTime = rawHasNewDayDateTime;
+    rawHasNewDayDateTime = false;
+    hasNewDayOfWeek = rawHasNewDayOfWeek;
+    rawHasNewDayOfWeek = false;
+    #;
+    if hasNewDayDateTime then (
+        let bleData = Ble:readGeneric<dayDateTimeBLE>(dayDateTimeCharacterstic);
+        set ref clockState =
+        {
+            month =
+                case bleData.month of
+                | 0 => january()
+                | 1 => february()
+                | 2 => march()
+                | 3 => april()
+                | 4 => may()
+                | 5 => june()
+                | 6 => july()
+                | 7 => august()
+                | 8 => september()
+                | 9 => october()
+                | 10 => november()
+                | 11 => december()
+                | _ => january()
+                end;
+            day = bleData.day;
+            year = bleData.year;
+            hours = bleData.hours;
+            minutes = bleData.minutes;
+            seconds = bleData.seconds;
+            dayOfWeek = (!clockState).dayOfWeek
+        };
+        ())
+    else
+        ()
+    end;
+    if hasNewDayOfWeek then (
+        let bleData = Ble:readGeneric<dayOfWeekBLE>(dayOfWeekCharacterstic);
+        set ref clockState =
+        {
+            month = (!clockState).month;
+            day = (!clockState).day;
+            year = (!clockState).year;
+            hours = (!clockState).hours;
+            minutes = (!clockState).minutes;
+            seconds = (!clockState).seconds;
+            dayOfWeek =
+                case bleData.dayOfWeek of
+                | 0 => sunday()
+                | 1 => monday()
+                | 2 => tuesday()
+                | 3 => wednesday()
+                | 4 => thursday()
+                | 5 => friday()
+                | 6 => saturday()
+                | _ => sunday()
+                end
+        };  
+        ())
+    else
+        ()
+    end 
+)
 
 fun loop() = (
-    Gfx:drawVerticalGradient(0u16, 0u16, Arcada:displayWidth(), Arcada:displayHeight(), pink, purpleBlue);
+    Gfx:drawVerticalGradient(0i16, 0i16, toInt16(Arcada:displayWidth()), toInt16(Arcada:displayHeight()), pink, purpleBlue);
+
+    processBluetoothUpdates();
 
     Time:every(1000u32, clockTickerState) |>
     Signal:foldP(fn (t, dt) -> secondTick(dt) end, clockState) |>
     Signal:latch(clockState) |>
     Signal:sink(fn (dt) -> (
-        let datetime {month=month; day=day; year=year; hours=hours; minutes=minutes; seconds=seconds; dayOfWeek=dayOfWeek} = dt;
+        let {month=month; day=day; year=year; hours=hours; minutes=minutes; seconds=seconds; dayOfWeek=dayOfWeek} = dt;
 
         // Convert 24 hour format to 12 hour format
-        let displayHours : int32 =
+        let displayHours : int32 = toInt32(
             if hours == 0u8 then
                 12u8
             elif hours > 12u8 then
                 hours - 12u8
             else
                 hours
-            end;
+            end);
 
         Gfx:setTextColor(Color:white);
 
@@ -218,16 +307,16 @@ fun loop() = (
         let timeHourStr = CharList:i32ToCharList<;2>(displayHours);
         let timeHourStrColon = CharList:safeConcat(timeHourStr, ':');
         let minutesStr =
-            if minutes < 10 then
-                CharList:safeConcat('0', CharList:i32ToCharList<;1>(minutes))
+            if minutes < 10u8 then
+                CharList:safeConcat('0', CharList:i32ToCharList<;1>(toInt32(minutes)))
             else
-                CharList:i32ToCharList<;2>(minutes)
+                CharList:i32ToCharList<;2>(toInt32(minutes))
             end;
         let timeStr = CharList:safeConcat(timeHourStrColon, minutesStr);
 
         // Move the cursor to the center of the screen
         let (_, _, w, h) = Gfx:getCharListBounds(0, 0, timeStr);
-        Gfx:setCursor((Arcada:displayWidth() / 2) - (w / 2), (Arcada:displayHeight() / 2) + (h / 2));
+        Gfx:setCursor(toInt16((Arcada:displayWidth() / 2) - (w / 2)), toInt16((Arcada:displayHeight() / 2) + (h / 2)));
         
         // Print the time
         Gfx:printCharList(timeStr);
@@ -237,7 +326,7 @@ fun loop() = (
 
         // Determine if we are in AM or PM
         let ampm =
-            if hours < 12 then
+            if hours < 12u8 then
                 'AM'
             else
                 'PM'
@@ -245,7 +334,7 @@ fun loop() = (
         
         // Print the AM or PM
         let (_, _, w2, h2) = Gfx:getCharListBounds(0, 0, ampm);
-        Gfx:setCursor((Arcada:displayWidth() / 2) - (w2 / 2), (Arcada:displayHeight() / 2) + (h / 2) + h2 + 5);
+        Gfx:setCursor(toInt16((Arcada:displayWidth() / 2) - (w2 / 2)), toInt16((Arcada:displayHeight() / 2) + (h / 2) + h2 + 5));
         Gfx:printCharList(ampm);
 
         // Construct the day of week, month day string
@@ -258,11 +347,11 @@ fun loop() = (
                 dayOfWeekToCharList(dayOfWeek), ', '),
                 monthToCharList(month)),
                 ' '),
-                CharList:i32ToCharList<;2>(day));
+                CharList:i32ToCharList<;2>(toInt32(day)));
 
         // Draw the day string above the time
         let (_, _, w3, h3) = Gfx:getCharListBounds(0, 0, dateStr);
-        Gfx:setCursor((Arcada:displayWidth() / 2) - (w3 / 2), (Arcada:displayHeight() / 2) - (h / 2) - 5);
+        Gfx:setCursor(cast((Arcada:displayWidth() / 2) - (w3 / 2)), cast((Arcada:displayHeight() / 2) - (h / 2) - 5));
         Gfx:printCharList(dateStr)
     ) end);
 
