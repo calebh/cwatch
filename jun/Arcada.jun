@@ -6,38 +6,38 @@ include("\"Adafruit_Arcada.h\"")
 Adafruit_Arcada arcada;
 #
 
-fun arcadaBegin() = (
-    let mutable ret = false;
+fun arcadaBegin() = {
+    let mut ret = false;
     #ret = arcada.arcadaBegin();#;
-    ret
-)
+    ret;
+}
 
 fun displayBegin() = #arcada.displayBegin();#
 
 fun setBacklight(level : uint8) = #arcada.setBacklight(level);#
 
-fun displayWidth() : uint16 = (
-    let mutable w : uint16 = 0u16;
+fun displayWidth() : uint16 = {
+    let mut w : uint16 = 0u16;
     #w = arcada.display->width();#;
-    w
-)
+    w;
+}
 
-fun displayHeight() : uint16 = (
-    let mutable h : uint16 = 0u16;
+fun displayHeight() : uint16 = {
+    let mut h : uint16 = 0u16;
     #h = arcada.display->width();#;
-    h
-)
+    h;
+}
 
-fun createDoubleBuffer() : bool = (
+fun createDoubleBuffer() : bool = {
     let w = displayWidth();
     let h = displayHeight();
-    let ret = true;
+    let mut ret = true;
     #ret = arcada.createFrameBuffer(w, h);#;
-    ret
-)
+    ret;
+}
 
-fun blitDoubleBuffer() : bool = (
-    let ret = true;
+fun blitDoubleBuffer() : bool = {
+    let mut ret = true;
     #ret = arcada.blitFrameBuffer(0, 0, true, false);#;
-    ret
-)
+    ret;
+}
