@@ -6,19 +6,19 @@ type font = defaultFont() | freeSans9() | freeSans24()
 
 fun setFont(f : font) =
     match f {
-        defaultFont() => #arcada.getCanvas()->setFont();#,
-        freeSans9() => #arcada.getCanvas()->setFont(&FreeSans9pt7b);#,
+        defaultFont() => #arcada.getCanvas()->setFont();#
+        freeSans9() => #arcada.getCanvas()->setFont(&FreeSans9pt7b);#
         freeSans24() => #arcada.getCanvas()->setFont(&FreeSans24pt7b);#
     }
 
 fun fillScreen(c : rgb) = {
-    let cPrime = rgbToRgb565(c);
-    #arcada.getCanvas()->fillScreen(cPrime);#;
+    let cPrime = rgbToRgb565(c)
+    #arcada.getCanvas()->fillScreen(cPrime);#
 }
 
 fun drawPixel(x : int16, y : int16, c : rgb) = {
-    let cPrime = rgbToRgb565(c);
-    #arcada.getCanvas()->drawPixel(x, y, cPrime);#;
+    let cPrime = rgbToRgb565(c)
+    #arcada.getCanvas()->drawPixel(x, y, cPrime);#
 }
 
 fun drawFastHLine565(x : int16, y : int16, w : int16, c : uint16) =
@@ -26,7 +26,7 @@ fun drawFastHLine565(x : int16, y : int16, w : int16, c : uint16) =
 
 fun drawPixel565(x : uint16, y : uint16, c : uint16) = #arcada.getCanvas()->drawPixel(x, y, c);#
 
-fun printCharList(cl : charlist<;n>) =
+fun printCharList(cl : charlist<n>) =
     #arcada.getCanvas()->print((char *) &cl.data[0]);#
 
 fun printString(s : string) =
@@ -34,34 +34,34 @@ fun printString(s : string) =
 
 type align = centerHorizontally() | centerVertically() | centerBoth()
 
-fun centerCursor(x : int16, y : int16, align : align, cl : list<uint8; n>) = {
-    let (_, _, w, h) = Gfx:getCharListBounds(0, 0, cl);
-    let ws = toInt16(w);
-    let hs = toInt16(h);
+fun centerCursor(x : int16, y : int16, align : align, cl : list<uint8, n>) = {
+    let (_, _, w, h) = Gfx:getCharListBounds(0, 0, cl)
+    let ws = toInt16(w)
+    let hs = toInt16(h)
     match align {
         centerHorizontally() => 
-            Gfx:setCursor(x - (ws / 2), y),
+            Gfx:setCursor(x - (ws / 2), y)
         centerVertically() =>
-            Gfx:setCursor(x, y - (hs / 2)),
+            Gfx:setCursor(x, y - (hs / 2))
         centerBoth() =>
             Gfx:setCursor(x - (ws / 2), y - (hs / 2))
-    };
+    }
 }
 
 fun setCursor(x : int16, y : int16) = #arcada.getCanvas()->setCursor(x, y);#
 
 fun setTextColor(c : rgb) = {
-    let cPrime = rgbToRgb565(c);
-    #arcada.getCanvas()->setTextColor(cPrime);#;
+    let cPrime = rgbToRgb565(c)
+    #arcada.getCanvas()->setTextColor(cPrime);#
 }
 
-fun getCharListBounds(x : int16, y : int16, cl : charlist<;n>) = {
-    let mut xret : int16 = 0i16;
-    let mut yret : int16 = 0i16;
-    let mut wret : uint16 = 0u16;
-    let mut hret : uint16 = 0u16;
-    #arcada.getCanvas()->getTextBounds((const char *) &cl.data[0], x, y, &xret, &yret, &wret, &hret);#;
-    (xret, yret, wret, hret);
+fun getCharListBounds(x : int16, y : int16, cl : charlist<n>) = {
+    let mut xret : int16 = 0i16
+    let mut yret : int16 = 0i16
+    let mut wret : uint16 = 0u16
+    let mut hret : uint16 = 0u16
+    #arcada.getCanvas()->getTextBounds((const char *) &cl.data[0], x, y, &xret, &yret, &wret, &hret);#
+    (xret, yret, wret, hret)
 }
 
 fun setTextWrap(wrap : bool) = #arcada.getCanvas()->setTextWrap(wrap);#
@@ -69,27 +69,31 @@ fun setTextWrap(wrap : bool) = #arcada.getCanvas()->setTextWrap(wrap);#
 fun setTextSize(size : uint8) = #arcada.getCanvas()->setTextSize(size);#
 
 fun drawVerticalGradient(x0i : int16, y0i : int16, w : int16, h : int16, c1 : Color:rgb, c2 : Color:rgb) = {
-    let dispW = toInt16(Arcada:displayWidth());
-    let dispH = toInt16(Arcada:displayHeight());
-    let x0 = Math:clamp(x0i, 0i16, dispW - 1i16);
-    let y0 = Math:clamp(y0i, 0i16, dispH - 1i16);
-    let ymax = y0i + h;
-    let y1 = Math:clamp(ymax, 0i16, dispH);
+    let dispW = toInt16(Arcada:displayWidth())
+    let dispH = toInt16(Arcada:displayHeight())
+    let x0 = Math:clamp(x0i, 0i16, dispW - 1i16)
+    let y0 = Math:clamp(y0i, 0i16, dispH - 1i16)
+    let ymax = y0i + h
+    let y1 = Math:clamp(ymax, 0i16, dispH)
 
-    let {r=r1, g=g1, b=b1} = c1;
-    let {r=r2, g=g2, b=b2} = c2;
-    let r1f = toFloat(r1);
-    let g1f = toFloat(g1);
-    let b1f = toFloat(b1);
-    let r2f = toFloat(r2);
-    let g2f = toFloat(g2);
-    let b2f = toFloat(b2);
+    let {r := r1, g := g1, b := b1} = c1
+    let {r := r2, g := g2, b := b2} = c2
+    let r1f = toFloat(r1)
+    let g1f = toFloat(g1)
+    let b1f = toFloat(b1)
+    let r2f = toFloat(r2)
+    let g2f = toFloat(g2)
+    let b2f = toFloat(b2)
 
     for (y : int16 in y0 to y1) {
-        let weight1 = toFloat(ymax - y) / toFloat(h);
-        let weight2 = 1.0f - weight1;
-        let gradColor = {r=toUInt8(r1f * weight1 + r2f * weight2), g=toUInt8(g1f * weight1 + g2f * weight2), b=toUInt8(b1f * weight1 + g2f * weight2)};
-        let gradColor565 = Color:rgbToRgb565(gradColor);
-        drawFastHLine565(x0, y, w, gradColor565);
-    };
+        let weight1 = toFloat(ymax - y) / toFloat(h)
+        let weight2 = 1.0f - weight1
+        let gradColor = {
+            r := toUInt8(r1f * weight1 + r2f * weight2),
+            g := toUInt8(g1f * weight1 + g2f * weight2),
+            b := toUInt8(b1f * weight1 + g2f * weight2)
+        }
+        let gradColor565 = Color:rgbToRgb565(gradColor)
+        drawFastHLine565(x0, y, w, gradColor565)
+    }
 }

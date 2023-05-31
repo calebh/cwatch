@@ -11,512 +11,512 @@ type secureModet = secureMode(uint16)
 type propertiest = properties(uint8)
 
 let bleGapAdvFlagLeLimitedDiscMode = {
-    var n : uint8;
-    #n = BLE_GAP_ADV_FLAG_LE_LIMITED_DISC_MODE;#;
-    advertisingFlag(n);
+    var n : uint8
+    #n = BLE_GAP_ADV_FLAG_LE_LIMITED_DISC_MODE;#
+    advertisingFlag(n)
 }
 
 let bleGapAdvFlagLeGeneralDiscMode = {
-    var n : uint8;
-    #n = BLE_GAP_ADV_FLAG_LE_GENERAL_DISC_MODE;#;
-    advertisingFlag(n);
+    var n : uint8
+    #n = BLE_GAP_ADV_FLAG_LE_GENERAL_DISC_MODE;#
+    advertisingFlag(n)
 }
 
 let bleGapAdvFlagBrEdrNotSupported = {
-    var n : uint8;
-    #n = BLE_GAP_ADV_FLAG_BR_EDR_NOT_SUPPORTED;#;
-    advertisingFlag(n);
+    var n : uint8
+    #n = BLE_GAP_ADV_FLAG_BR_EDR_NOT_SUPPORTED;#
+    advertisingFlag(n)
 }
 
 let bleGapAdvFlagLeBrEdrController = {
-    var n : uint8;
-    #n = BLE_GAP_ADV_FLAG_LE_BR_EDR_CONTROLLER;#;
-    advertisingFlag(n);
+    var n : uint8
+    #n = BLE_GAP_ADV_FLAG_LE_BR_EDR_CONTROLLER;#
+    advertisingFlag(n)
 }
 
 let bleGapAdvFlagLeBrEdrHost = {
-    var n : uint8;
-    #n = BLE_GAP_ADV_FLAG_LE_BR_EDR_HOST;#;
-    advertisingFlag(n);
+    var n : uint8
+    #n = BLE_GAP_ADV_FLAG_LE_BR_EDR_HOST;#
+    advertisingFlag(n)
 }
 
 let bleGapAdvFlagsLeOnlyLimitedDiscMode = {
-    var n : uint8;
-    #n = BLE_GAP_ADV_FLAGS_LE_ONLY_LIMITED_DISC_MODE;#;
-    advertisingFlag(n);
+    var n : uint8
+    #n = BLE_GAP_ADV_FLAGS_LE_ONLY_LIMITED_DISC_MODE;#
+    advertisingFlag(n)
 }
 
 let bleGapAdvFlagsLeOnlyGeneralDiscMode = {
-    var n : uint8;
-    #n = BLE_GAP_ADV_FLAGS_LE_ONLY_GENERAL_DISC_MODE;#;
-    advertisingFlag(n);
+    var n : uint8
+    #n = BLE_GAP_ADV_FLAGS_LE_ONLY_GENERAL_DISC_MODE;#
+    advertisingFlag(n)
 }
 
 let appearanceUnknown = {
-    var n : uint16;
-    #n = BLE_APPEARANCE_UNKNOWN;#;
-    appearance(n);
+    var n : uint16
+    #n = BLE_APPEARANCE_UNKNOWN;#
+    appearance(n)
 }
 
 let appearanceGenericPhone = {
-    var n : uint16;
-    #n = BLE_APPEARANCE_GENERIC_PHONE;#;
-    appearance(n);
+    var n : uint16
+    #n = BLE_APPEARANCE_GENERIC_PHONE;#
+    appearance(n)
 }
 
 let appearanceGenericComputer = {
-    var n : uint16;
-    #n = BLE_APPEARANCE_GENERIC_COMPUTER;#;
-    appearance(n);
+    var n : uint16
+    #n = BLE_APPEARANCE_GENERIC_COMPUTER;#
+    appearance(n)
 }
 
 let appearanceGenericWatch = {
-    var n : uint16;
-    #n = BLE_APPEARANCE_GENERIC_WATCH;#;
-    appearance(n);
+    var n : uint16
+    #n = BLE_APPEARANCE_GENERIC_WATCH;#
+    appearance(n)
 }
 
 let appearanceGenericSportsWatch = {
-    var n : uint16;
-    #n = BLE_APPEARANCE_WATCH_SPORTS_WATCH;#;
-    appearance(n);
+    var n : uint16
+    #n = BLE_APPEARANCE_WATCH_SPORTS_WATCH;#
+    appearance(n)
 }
 
 let appearanceGenericClock = {
-    var n : uint16;
-    #n = BLE_APPEARANCE_GENERIC_CLOCK;#;
-    appearance(n);
+    var n : uint16
+    #n = BLE_APPEARANCE_GENERIC_CLOCK;#
+    appearance(n)
 }
 
 let appearanceGenericDisplay = {
-    var n : uint16;
-    #n = BLE_APPEARANCE_GENERIC_DISPLAY;#;
-    appearance(n);
+    var n : uint16
+    #n = BLE_APPEARANCE_GENERIC_DISPLAY;#
+    appearance(n)
 }
 
 let appearanceGenericRemoteControl = {
-    var n : uint16;
-    #n = BLE_APPEARANCE_GENERIC_REMOTE_CONTROL;#;
-    appearance(n);
+    var n : uint16
+    #n = BLE_APPEARANCE_GENERIC_REMOTE_CONTROL;#
+    appearance(n)
 }
 
 let appearanceGenericEyeGlasses = {
-    var n : uint16;
-    #n = BLE_APPEARANCE_GENERIC_EYE_GLASSES;#;
-    appearance(n);
+    var n : uint16
+    #n = BLE_APPEARANCE_GENERIC_EYE_GLASSES;#
+    appearance(n)
 }
 
 let appearanceGenericTag = {
-    var n : uint16;
-    #n = BLE_APPEARANCE_GENERIC_TAG;#;
-    appearance(n);
+    var n : uint16
+    #n = BLE_APPEARANCE_GENERIC_TAG;#
+    appearance(n)
 }
 
 let appearanceGenericKeyring = {
-    var n : uint16;
-    #n = BLE_APPEARANCE_GENERIC_KEYRING;#;
-    appearance(n);
+    var n : uint16
+    #n = BLE_APPEARANCE_GENERIC_KEYRING;#
+    appearance(n)
 }
 
 let appearanceGenericMediaPlayer = {
-    var n : uint16;
-    #n = BLE_APPEARANCE_GENERIC_MEDIA_PLAYER;#;
-    appearance(n);
+    var n : uint16
+    #n = BLE_APPEARANCE_GENERIC_MEDIA_PLAYER;#
+    appearance(n)
 }
 
 let appearanceGenericBarcodeScanner = {
-    var n : uint16;
-    #n = BLE_APPEARANCE_GENERIC_BARCODE_SCANNER;#;
-    appearance(n);
+    var n : uint16
+    #n = BLE_APPEARANCE_GENERIC_BARCODE_SCANNER;#
+    appearance(n)
 }
 
 let appearanceGenericThermometer = {
-    var n : uint16;
-    #n = BLE_APPEARANCE_GENERIC_THERMOMETER;#;
-    appearance(n);
+    var n : uint16
+    #n = BLE_APPEARANCE_GENERIC_THERMOMETER;#
+    appearance(n)
 }
 
 let appearanceThermometerEar = {
-    var n : uint16;
-    #n = BLE_APPEARANCE_THERMOMETER_EAR;#;
-    appearance(n);
+    var n : uint16
+    #n = BLE_APPEARANCE_THERMOMETER_EAR;#
+    appearance(n)
 }
 
 let appearanceGenericHeartRateSensor = {
-    var n : uint16;
-    #n = BLE_APPEARANCE_GENERIC_HEART_RATE_SENSOR;#;
-    appearance(n);
+    var n : uint16
+    #n = BLE_APPEARANCE_GENERIC_HEART_RATE_SENSOR;#
+    appearance(n)
 }
 
 let appearanceHeartRateSensorHeartRateBelt = {
-    var n : uint16;
-    #n = BLE_APPEARANCE_HEART_RATE_SENSOR_HEART_RATE_BELT;#;
-    appearance(n);
+    var n : uint16
+    #n = BLE_APPEARANCE_HEART_RATE_SENSOR_HEART_RATE_BELT;#
+    appearance(n)
 }
 
 let appearanceGenericBloodPressure = {
-    var n : uint16;
-    #n = BLE_APPEARANCE_GENERIC_BLOOD_PRESSURE;#;
-    appearance(n);
+    var n : uint16
+    #n = BLE_APPEARANCE_GENERIC_BLOOD_PRESSURE;#
+    appearance(n)
 }
 
 let appearanceBloodPressureArm = {
-    var n : uint16;
-    #n = BLE_APPEARANCE_BLOOD_PRESSURE_ARM;#;
-    appearance(n);
+    var n : uint16
+    #n = BLE_APPEARANCE_BLOOD_PRESSURE_ARM;#
+    appearance(n)
 }
 
 let appearanceBloodPressureWrist = {
-    var n : uint16;
-    #n = BLE_APPEARANCE_BLOOD_PRESSURE_WRIST;#;
-    appearance(n);
+    var n : uint16
+    #n = BLE_APPEARANCE_BLOOD_PRESSURE_WRIST;#
+    appearance(n)
 }
 
 let appearanceGenericHid = {
-    var n : uint16;
-    #n = BLE_APPEARANCE_GENERIC_HID;#;
-    appearance(n);
+    var n : uint16
+    #n = BLE_APPEARANCE_GENERIC_HID;#
+    appearance(n)
 }
 
 let appearanceHidKeyboard = {
-    var n : uint16;
-    #n = BLE_APPEARANCE_HID_KEYBOARD;#;
-    appearance(n);
+    var n : uint16
+    #n = BLE_APPEARANCE_HID_KEYBOARD;#
+    appearance(n)
 }
 
 let appearanceHidMouse = {
-    var n : uint16;
-    #n = BLE_APPEARANCE_HID_MOUSE;#;
-    appearance(n);
+    var n : uint16
+    #n = BLE_APPEARANCE_HID_MOUSE;#
+    appearance(n)
 }
 
 let appearanceHidJoystick = {
-    var n : uint16;
-    #n = BLE_APPEARANCE_HID_JOYSTICK;#;
-    appearance(n);
+    var n : uint16
+    #n = BLE_APPEARANCE_HID_JOYSTICK;#
+    appearance(n)
 }
 
 let appearanceHidGamepad = {
-    var n : uint16;
-    #n = BLE_APPEARANCE_HID_GAMEPAD;#;
-    appearance(n);
+    var n : uint16
+    #n = BLE_APPEARANCE_HID_GAMEPAD;#
+    appearance(n)
 }
 
 let appearanceHidDigitizerSubtype = {
-    var n : uint16;
-    #n = BLE_APPEARANCE_HID_DIGITIZERSUBTYPE;#;
-    appearance(n);
+    var n : uint16
+    #n = BLE_APPEARANCE_HID_DIGITIZERSUBTYPE;#
+    appearance(n)
 }
 
 let appearanceHidCardReader = {
-    var n : uint16;
-    #n = BLE_APPEARANCE_HID_CARD_READER;#;
-    appearance(n);
+    var n : uint16
+    #n = BLE_APPEARANCE_HID_CARD_READER;#
+    appearance(n)
 }
 
 let appearanceHidDigitalPen = {
-    var n : uint16;
-    #n = BLE_APPEARANCE_HID_DIGITAL_PEN;#;
-    appearance(n);
+    var n : uint16
+    #n = BLE_APPEARANCE_HID_DIGITAL_PEN;#
+    appearance(n)
 }
 
 let appearanceHidBarcode = {
-    var n : uint16;
-    #n = BLE_APPEARANCE_HID_BARCODE;#;
-    appearance(n);
+    var n : uint16
+    #n = BLE_APPEARANCE_HID_BARCODE;#
+    appearance(n)
 }
 
 let appearanceGenericGlucoseMeter = {
-    var n : uint16;
-    #n = BLE_APPEARANCE_GENERIC_GLUCOSE_METER;#;
-    appearance(n);
+    var n : uint16
+    #n = BLE_APPEARANCE_GENERIC_GLUCOSE_METER;#
+    appearance(n)
 }
 
 let appearanceGenericRunningWalkingSensor = {
-    var n : uint16;
-    #n = BLE_APPEARANCE_GENERIC_RUNNING_WALKING_SENSOR;#;
-    appearance(n);
+    var n : uint16
+    #n = BLE_APPEARANCE_GENERIC_RUNNING_WALKING_SENSOR;#
+    appearance(n)
 }
 
 let appearanceRunningWalkingSensorInShoe = {
-    var n : uint16;
-    #n = BLE_APPEARANCE_RUNNING_WALKING_SENSOR_IN_SHOE;#;
-    appearance(n);
+    var n : uint16
+    #n = BLE_APPEARANCE_RUNNING_WALKING_SENSOR_IN_SHOE;#
+    appearance(n)
 }
 
 let appearanceRunningWalkingSensorOnShoe = {
-    var n : uint16;
-    #n = BLE_APPEARANCE_RUNNING_WALKING_SENSOR_ON_SHOE;#;
-    appearance(n);
+    var n : uint16
+    #n = BLE_APPEARANCE_RUNNING_WALKING_SENSOR_ON_SHOE;#
+    appearance(n)
 }
 
 let appearanceRunningWalkingSensorOnHip = {
-    var n : uint16;
-    #n = BLE_APPEARANCE_RUNNING_WALKING_SENSOR_ON_HIP;#;
-    appearance(n);
+    var n : uint16
+    #n = BLE_APPEARANCE_RUNNING_WALKING_SENSOR_ON_HIP;#
+    appearance(n)
 }
 
 let appearanceGenericCycling = {
-    var n : uint16;
-    #n = BLE_APPEARANCE_GENERIC_CYCLING;#;
-    appearance(n);
+    var n : uint16
+    #n = BLE_APPEARANCE_GENERIC_CYCLING;#
+    appearance(n)
 }
 
 let appearanceCyclingCyclingComputer = {
-    var n : uint16;
-    #n = BLE_APPEARANCE_CYCLING_CYCLING_COMPUTER;#;
-    appearance(n);
+    var n : uint16
+    #n = BLE_APPEARANCE_CYCLING_CYCLING_COMPUTER;#
+    appearance(n)
 }
 
 let appearanceCyclingSpeedSensor = {
-    var n : uint16;
-    #n = BLE_APPEARANCE_CYCLING_SPEED_SENSOR;#;
-    appearance(n);
+    var n : uint16
+    #n = BLE_APPEARANCE_CYCLING_SPEED_SENSOR;#
+    appearance(n)
 }
 
 let appearanceCyclingCadenceSensor = {
-    var n : uint16;
-    #n = BLE_APPEARANCE_CYCLING_CADENCE_SENSOR;#;
-    appearance(n);
+    var n : uint16
+    #n = BLE_APPEARANCE_CYCLING_CADENCE_SENSOR;#
+    appearance(n)
 }
 
 let appearanceCyclingPowerSensor = {
-    var n : uint16;
-    #n = BLE_APPEARANCE_CYCLING_POWER_SENSOR;#;
-    appearance(n);
+    var n : uint16
+    #n = BLE_APPEARANCE_CYCLING_POWER_SENSOR;#
+    appearance(n)
 }
 
 let appearanceCyclingSpeedCadenceSensor = {
-    var n : uint16;
-    #n = BLE_APPEARANCE_CYCLING_SPEED_CADENCE_SENSOR;#;
-    appearance(n);
+    var n : uint16
+    #n = BLE_APPEARANCE_CYCLING_SPEED_CADENCE_SENSOR;#
+    appearance(n)
 }
 
 let appearanceGenericPulseOximeter = {
-    var n : uint16;
-    #n = BLE_APPEARANCE_GENERIC_PULSE_OXIMETER;#;
-    appearance(n);
+    var n : uint16
+    #n = BLE_APPEARANCE_GENERIC_PULSE_OXIMETER;#
+    appearance(n)
 }
 
 let appearancePulseOximiterFingertip = {
-    var n : uint16;
-    #n = BLE_APPEARANCE_PULSE_OXIMETER_FINGERTIP;#;
-    appearance(n);
+    var n : uint16
+    #n = BLE_APPEARANCE_PULSE_OXIMETER_FINGERTIP;#
+    appearance(n)
 }
 
 let appearancePluseOximeterWristWorn = {
-    var n : uint16;
-    #n = BLE_APPEARANCE_PULSE_OXIMETER_WRIST_WORN;#;
-    appearance(n);
+    var n : uint16
+    #n = BLE_APPEARANCE_PULSE_OXIMETER_WRIST_WORN;#
+    appearance(n)
 }
 
 let appearanceGenericWeightScale = {
-    var n : uint16;
-    #n = BLE_APPEARANCE_GENERIC_WEIGHT_SCALE;#;
-    appearance(n);
+    var n : uint16
+    #n = BLE_APPEARANCE_GENERIC_WEIGHT_SCALE;#
+    appearance(n)
 }
 
 let appearanceGenericOutdoorSportsAct = {
-    var n : uint16;
-    #n = BLE_APPEARANCE_GENERIC_OUTDOOR_SPORTS_ACT;#;
-    appearance(n);
+    var n : uint16
+    #n = BLE_APPEARANCE_GENERIC_OUTDOOR_SPORTS_ACT;#
+    appearance(n)
 }
 
 let appearanceOutdoorSportsActLocDisp = {
-    var n : uint16;
-    #n = BLE_APPEARANCE_OUTDOOR_SPORTS_ACT_LOC_DISP;#;
-    appearance(n);
+    var n : uint16
+    #n = BLE_APPEARANCE_OUTDOOR_SPORTS_ACT_LOC_DISP;#
+    appearance(n)
 }
 
 let appearanceOutdoorSportsActLocAndNavDisp = {
-    var n : uint16;
-    #n = BLE_APPEARANCE_OUTDOOR_SPORTS_ACT_LOC_AND_NAV_DISP;#;
-    appearance(n);
+    var n : uint16
+    #n = BLE_APPEARANCE_OUTDOOR_SPORTS_ACT_LOC_AND_NAV_DISP;#
+    appearance(n)
 }
 
 let appearanceOutdoorSportsActLocPod = {
-    var n : uint16;
-    #n = BLE_APPEARANCE_OUTDOOR_SPORTS_ACT_LOC_POD;#;
-    appearance(n);
+    var n : uint16
+    #n = BLE_APPEARANCE_OUTDOOR_SPORTS_ACT_LOC_POD;#
+    appearance(n)
 }
 
 let appearanceOutdoorSportsActLocAndNavPod = {
-    var n : uint16;
-    #n = BLE_APPEARANCE_OUTDOOR_SPORTS_ACT_LOC_AND_NAV_POD;#;
-    appearance(n);
+    var n : uint16
+    #n = BLE_APPEARANCE_OUTDOOR_SPORTS_ACT_LOC_AND_NAV_POD;#
+    appearance(n)
 }
 
 let secModeNoAccess = {
-    var n : uint16;
-    #n = (uint16_t) SECMODE_NO_ACCESS;#;
-    secureMode(n);
+    var n : uint16
+    #n = (uint16_t) SECMODE_NO_ACCESS;#
+    secureMode(n)
 }
 
 let secModeOpen = {
-    var n : uint16;
-    #n = (uint16_t) SECMODE_OPEN;#;
-    secureMode(n);
+    var n : uint16
+    #n = (uint16_t) SECMODE_OPEN;#
+    secureMode(n)
 }
 
 let secModeEncNoMITM = {
-    var n : uint16;
-    #n = (uint16_t) SECMODE_ENC_NO_MITM;#;
-    secureMode(n);
+    var n : uint16
+    #n = (uint16_t) SECMODE_ENC_NO_MITM;#
+    secureMode(n)
 }
 
 let secModeEncWithMITM = {
-    var n : uint16;
-    #n = (uint16_t) SECMODE_ENC_WITH_MITM;#;
-    secureMode(n);
+    var n : uint16
+    #n = (uint16_t) SECMODE_ENC_WITH_MITM;#
+    secureMode(n)
 }
 
 let secModeSignedNoMITM = {
-    var n : uint16;
-    #n = (uint16_t) SECMODE_SIGNED_NO_MITM;#;
-    secureMode(n);
+    var n : uint16
+    #n = (uint16_t) SECMODE_SIGNED_NO_MITM;#
+    secureMode(n)
 }
 
 let secModeSignedWithMITM = {
-    var n : uint16;
-    #n = (uint16_t) SECMODE_SIGNED_WITH_MITM;#;
-    secureMode(n);
+    var n : uint16
+    #n = (uint16_t) SECMODE_SIGNED_WITH_MITM;#
+    secureMode(n)
 }
 
 let propertiesBroadcast = {
-    var n : uint8;
-    #n = (uint8_t) CHR_PROPS_BROADCAST;#;
-    properties(n);
+    var n : uint8
+    #n = (uint8_t) CHR_PROPS_BROADCAST;#
+    properties(n)
 }
 
 let propertiesRead = {
-    var n : uint8;
-    #n = (uint8_t) CHR_PROPS_READ;#;
-    properties(n);
+    var n : uint8
+    #n = (uint8_t) CHR_PROPS_READ;#
+    properties(n)
 }
 
 let propertiesWriteWoResp = {
-    var n : uint8;
-    #n = (uint8_t) CHR_PROPS_WRITE_WO_RESP;#;
-    properties(n);
+    var n : uint8
+    #n = (uint8_t) CHR_PROPS_WRITE_WO_RESP;#
+    properties(n)
 }
 
 let propertiesWrite = {
-    var n : uint8;
-    #n = (uint8_t) CHR_PROPS_WRITE;#;
-    properties(n);
+    var n : uint8
+    #n = (uint8_t) CHR_PROPS_WRITE;#
+    properties(n)
 }
 
 let propertiesNotify = {
-    var n : uint8;
-    #n = (uint8_t) CHR_PROPS_NOTIFY;#;
-    properties(n);
+    var n : uint8
+    #n = (uint8_t) CHR_PROPS_NOTIFY;#
+    properties(n)
 }
 
 let propertiesIndicate = {
-    var n : uint8;
-    #n = (uint8_t) CHR_PROPS_INDICATE;#;
-    properties(n);
+    var n : uint8
+    #n = (uint8_t) CHR_PROPS_INDICATE;#
+    properties(n)
 }
 
 // Service functions
 fun beginService(s) = {
-    let service(p) = s;
-    #((BLEService *) p)->begin();#;
+    let service(p) = s
+    #((BLEService *) p)->begin();#
 }
 
 // Characteristic functions
 fun beginCharacterstic(c) = {
-    let characterstic(p) = c;
-    #((BLECharacteristic *) p)->begin();#;
+    let characterstic(p) = c
+    #((BLECharacteristic *) p)->begin();#
 }
 
-fun writeCharactersticBytes(c, bytes : list<uint8; n>) = {
-    let { data = data, length=length } = bytes;
-    let characterstic(p) = c;
-    let mut ret : uint16 = 0u16;
-    #ret = ((BLECharacteristic *) p)->write((void *) &data[0], length);#;
-    ret;
+fun writeCharactersticBytes(c, bytes : list<uint8, n>) = {
+    let { data := data, length := length } = bytes
+    let characterstic(p) = c
+    let mut ret : uint16 = 0u16
+    #ret = ((BLECharacteristic *) p)->write((void *) &data[0], length);#
+    ret
 }
 
 fun writeCharacterstic8(c, n : uint8) = {
-    let characterstic(p) = c;
-    let mut ret : uint16 = 0u16;
-    #ret = ((BLECharacteristic *) p)->write8(n);#;
-    ret;
+    let characterstic(p) = c
+    let mut ret : uint16 = 0u16
+    #ret = ((BLECharacteristic *) p)->write8(n);#
+    ret
 }
 
 fun writeCharacterstic16(c, n : uint16) = {
-    let characterstic(p) = c;
-    let mut ret : uint16 = 0u16;
-    #ret = ((BLECharacteristic *) p)->write16(n);#;
-    ret;
+    let characterstic(p) = c
+    let mut ret : uint16 = 0u16
+    #ret = ((BLECharacteristic *) p)->write16(n);#
+    ret
 }
 
 fun writeCharacterstic32(c, n : uint32) = {
-    let characterstic(p) = c;
-    let mut ret : uint16 = 0u16;
-    #ret = ((BLECharacteristic *) p)->write32(n);#;
-    ret;
+    let characterstic(p) = c
+    let mut ret : uint16 = 0u16
+    #ret = ((BLECharacteristic *) p)->write32(n);#
+    ret
 }
 
 fun writeCharactersticSigned32(c, n : int32) = {
-    let characterstic(p) = c;
-    let mut ret : uint16 = 0u16;
-    #ret = ((BLECharacteristic *) p)->write32((int) n);#;
-    ret;
+    let characterstic(p) = c
+    let mut ret : uint16 = 0u16
+    #ret = ((BLECharacteristic *) p)->write32((int) n);#
+    ret
 }
 
 fun writeGeneric(c, x : t) = {
-    let characterstic(p) = c;
-    let mut ret : uint16 = 0u16;
-    #ret = ((BLECharacteristic *) p)->write((void *) &x, sizeof(t));#;
-    ret;
+    let characterstic(p) = c
+    let mut ret : uint16 = 0u16
+    #ret = ((BLECharacteristic *) p)->write((void *) &x, sizeof(t));#
+    ret
 }
 
 fun readGeneric(c) : t = {
-    let characterstic(p) = c;
-    var ret : t;
-    #((BLECharacteristic *) p)->read((void *) &ret, sizeof(t));#;
-    ret;
+    let characterstic(p) = c
+    var ret : t
+    #((BLECharacteristic *) p)->read((void *) &ret, sizeof(t));#
+    ret
 }
 
 fun setCharacteristicPermission(c, readPermission, writePermission) = {
-    let secureMode(readN) = readPermission;
-    let secureMode(writeN) = writePermission;
-    let characterstic(p) = c;
-    #((BLECharacteristic *) p)->setPermission((SecureMode_t) readN, (SecureMode_t) writeN);#;
+    let secureMode(readN) = readPermission
+    let secureMode(writeN) = writePermission
+    let characterstic(p) = c
+    #((BLECharacteristic *) p)->setPermission((SecureMode_t) readN, (SecureMode_t) writeN);#
 }
 
 fun setCharacteristicProperties(c, prop) = {
-    let properties(propN) = prop;
-    let characterstic(p) = c;
-    #((BLECharacteristic *) p)->setProperties(propN);#;
+    let properties(propN) = prop
+    let characterstic(p) = c
+    #((BLECharacteristic *) p)->setProperties(propN);#
 }
 
 fun setCharacteristicFixedLen(c, size : uint32) = {
-    let characterstic(p) = c;
-    #((BLECharacteristic *) p)->setFixedLen(size);#;
+    let characterstic(p) = c
+    #((BLECharacteristic *) p)->setFixedLen(size);#
 }
 
 // Bluefruit top level functions
 fun bluefruitBegin() = #Bluefruit.begin();#
-fun bluefruitPeriphSetConnInterval(minTime : uint16, maxTime : uint16) = #Bluefruit.Periph.setConnInterval(9, 16);#
+fun bluefruitPeriphSetConnInterval(minTime : uint16, maxTime : uint16) = #Bluefruit.Periph.setConnInterval(minTime, maxTime);#
 fun bluefruitSetTxPower(power : int8) = #Bluefruit.setTxPower(power);#
 fun bluefruitSetName(name : string) = #Bluefruit.setName(name);#
 
 // Bluefruit advertising functions
 fun bluefruitAdvertisingAddFlags(flag) = {
-    let advertisingFlag(flagNum) = flag;
-    #Bluefruit.Advertising.addFlags(flagNum);#;
+    let advertisingFlag(flagNum) = flag
+    #Bluefruit.Advertising.addFlags(flagNum);#
 }
 fun bluefruitAdvertisingAddTxPower() = #Bluefruit.Advertising.addTxPower();#
 fun bluefruitAdvertisingAddAppearance(app) = {
-    let appearance(flagNum) = app;
-    #Bluefruit.Advertising.addAppearance(flagNum);#;
+    let appearance(flagNum) = app
+    #Bluefruit.Advertising.addAppearance(flagNum);#
 }
 fun bluefruitAdvertisingAddService(serv) = {
-    let service(p) = serv;
-    #Bluefruit.Advertising.addService(*((BLEService *) p));#;
+    let service(p) = serv
+    #Bluefruit.Advertising.addService(*((BLEService *) p));#
 }
 fun bluefruitAdvertisingAddName() = #Bluefruit.Advertising.addName();#
 fun bluefruitAdvertisingRestartOnDisconnect(restart : bool) = #Bluefruit.Advertising.restartOnDisconnect(restart);#
