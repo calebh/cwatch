@@ -1,4 +1,4 @@
-//Compiled on 5/31/2023 4:15:01 PM
+//Compiled on 5/31/2023 5:42:56 PM
 #include <inttypes.h>
 #include <stdbool.h>
 #include <new>
@@ -9233,7 +9233,7 @@ namespace Ble {
 namespace Ble {
     juniper::unit bluefruitPeriphSetConnInterval(uint16_t minTime, uint16_t maxTime) {
         return (([&]() -> juniper::unit {
-            Bluefruit.Periph.setConnInterval(9, 16);
+            Bluefruit.Periph.setConnInterval(minTime, maxTime);
             return {};
         })());
     }
@@ -9992,14 +9992,14 @@ namespace CWatch {
             })());
             (([&]() -> juniper::unit {
                 if (hasNewDayDateTime) {
-                    (([&]() -> CWatch::month {
+                    (([&]() -> uint8_t {
                         juniper::records::recordt_8<uint8_t, uint8_t, uint32_t, uint8_t, uint8_t, uint8_t> guid276 = Ble::readGeneric<juniper::records::recordt_8<uint8_t, uint8_t, uint32_t, uint8_t, uint8_t, uint8_t>>(dayDateTimeCharacterstic);
                         if (!(true)) {
                             juniper::quit<juniper::unit>();
                         }
                         juniper::records::recordt_8<uint8_t, uint8_t, uint32_t, uint8_t, uint8_t, uint8_t> bleData = guid276;
                         
-                        return (((clockState).get())->month = (([&]() -> CWatch::month {
+                        (((clockState).get())->month = (([&]() -> CWatch::month {
                             uint8_t guid277 = (bleData).month;
                             return (((bool) (((bool) (guid277 == ((int32_t) 0))) && true)) ? 
                                 (([&]() -> CWatch::month {
@@ -10068,6 +10068,11 @@ namespace CWatch {
                                                                             :
                                                                                 juniper::quit<CWatch::month>())))))))))))));
                         })()));
+                        (((clockState).get())->day = (bleData).day);
+                        (((clockState).get())->year = (bleData).year);
+                        (((clockState).get())->hours = (bleData).hours);
+                        (((clockState).get())->minutes = (bleData).minutes);
+                        return (((clockState).get())->seconds = (bleData).seconds);
                     })());
                 }
                 return {};
@@ -10401,29 +10406,23 @@ namespace Gfx {
 namespace CWatch {
     bool loop() {
         return (([&]() -> bool {
-            juniper::unit guid307 = processBluetoothUpdates();
-            if (!(true)) {
-                juniper::quit<juniper::unit>();
-            }
-            juniper::unit foo = guid307;
-            
             Gfx::drawVerticalGradient(((int16_t) 0), ((int16_t) 0), toInt16<uint16_t>(Arcada::displayWidth()), toInt16<uint16_t>(Arcada::displayHeight()), pink, purpleBlue);
             processBluetoothUpdates();
             Signal::sink<juniper::records::recordt_10<uint8_t, CWatch::dayOfWeek, uint8_t, uint8_t, CWatch::month, uint8_t, uint32_t>, void>(juniper::function<void, juniper::unit(juniper::records::recordt_10<uint8_t, CWatch::dayOfWeek, uint8_t, uint8_t, CWatch::month, uint8_t, uint32_t>)>([](juniper::records::recordt_10<uint8_t, CWatch::dayOfWeek, uint8_t, uint8_t, CWatch::month, uint8_t, uint32_t> dt) -> juniper::unit { 
                 return (([&]() -> juniper::unit {
-                    juniper::records::recordt_10<uint8_t, CWatch::dayOfWeek, uint8_t, uint8_t, CWatch::month, uint8_t, uint32_t> guid308 = dt;
+                    juniper::records::recordt_10<uint8_t, CWatch::dayOfWeek, uint8_t, uint8_t, CWatch::month, uint8_t, uint32_t> guid307 = dt;
                     if (!(true)) {
                         juniper::quit<juniper::unit>();
                     }
-                    CWatch::dayOfWeek dayOfWeek = (guid308).dayOfWeek;
-                    uint8_t seconds = (guid308).seconds;
-                    uint8_t minutes = (guid308).minutes;
-                    uint8_t hours = (guid308).hours;
-                    uint32_t year = (guid308).year;
-                    uint8_t day = (guid308).day;
-                    CWatch::month month = (guid308).month;
+                    CWatch::dayOfWeek dayOfWeek = (guid307).dayOfWeek;
+                    uint8_t seconds = (guid307).seconds;
+                    uint8_t minutes = (guid307).minutes;
+                    uint8_t hours = (guid307).hours;
+                    uint32_t year = (guid307).year;
+                    uint8_t day = (guid307).day;
+                    CWatch::month month = (guid307).month;
                     
-                    int32_t guid309 = toInt32<uint8_t>((((bool) (hours == ((uint8_t) 0))) ? 
+                    int32_t guid308 = toInt32<uint8_t>((((bool) (hours == ((uint8_t) 0))) ? 
                         ((uint8_t) 12)
                     :
                         (((bool) (hours > ((uint8_t) 12))) ? 
@@ -10433,109 +10432,109 @@ namespace CWatch {
                     if (!(true)) {
                         juniper::quit<juniper::unit>();
                     }
-                    int32_t displayHours = guid309;
+                    int32_t displayHours = guid308;
                     
                     Gfx::setTextColor(Color::white);
                     Gfx::setFont(Gfx::freeSans24());
                     Gfx::setTextSize(((uint8_t) 1));
-                    juniper::records::recordt_0<juniper::array<uint8_t, 3>, uint32_t> guid310 = CharList::i32ToCharList<2>(displayHours);
+                    juniper::records::recordt_0<juniper::array<uint8_t, 3>, uint32_t> guid309 = CharList::i32ToCharList<2>(displayHours);
                     if (!(true)) {
                         juniper::quit<juniper::unit>();
                     }
-                    juniper::records::recordt_0<juniper::array<uint8_t, 3>, uint32_t> timeHourStr = guid310;
+                    juniper::records::recordt_0<juniper::array<uint8_t, 3>, uint32_t> timeHourStr = guid309;
                     
-                    juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t> guid311 = CharList::safeConcat<2, 1>(timeHourStr, (([&]() -> juniper::records::recordt_0<juniper::array<uint8_t, 2>, uint32_t>{
-                        juniper::records::recordt_0<juniper::array<uint8_t, 2>, uint32_t> guid312;
-                        guid312.data = (juniper::array<uint8_t, 2> { {((uint8_t) 58), ((uint8_t) 0)} });
-                        guid312.length = ((uint32_t) 2);
-                        return guid312;
+                    juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t> guid310 = CharList::safeConcat<2, 1>(timeHourStr, (([&]() -> juniper::records::recordt_0<juniper::array<uint8_t, 2>, uint32_t>{
+                        juniper::records::recordt_0<juniper::array<uint8_t, 2>, uint32_t> guid311;
+                        guid311.data = (juniper::array<uint8_t, 2> { {((uint8_t) 58), ((uint8_t) 0)} });
+                        guid311.length = ((uint32_t) 2);
+                        return guid311;
                     })()));
                     if (!(true)) {
                         juniper::quit<juniper::unit>();
                     }
-                    juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t> timeHourStrColon = guid311;
+                    juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t> timeHourStrColon = guid310;
                     
-                    juniper::records::recordt_0<juniper::array<uint8_t, 3>, uint32_t> guid313 = (((bool) (minutes < ((uint8_t) 10))) ? 
+                    juniper::records::recordt_0<juniper::array<uint8_t, 3>, uint32_t> guid312 = (((bool) (minutes < ((uint8_t) 10))) ? 
                         CharList::safeConcat<1, 1>((([&]() -> juniper::records::recordt_0<juniper::array<uint8_t, 2>, uint32_t>{
-                            juniper::records::recordt_0<juniper::array<uint8_t, 2>, uint32_t> guid314;
-                            guid314.data = (juniper::array<uint8_t, 2> { {((uint8_t) 48), ((uint8_t) 0)} });
-                            guid314.length = ((uint32_t) 2);
-                            return guid314;
+                            juniper::records::recordt_0<juniper::array<uint8_t, 2>, uint32_t> guid313;
+                            guid313.data = (juniper::array<uint8_t, 2> { {((uint8_t) 48), ((uint8_t) 0)} });
+                            guid313.length = ((uint32_t) 2);
+                            return guid313;
                         })()), CharList::i32ToCharList<1>(toInt32<uint8_t>(minutes)))
                     :
                         CharList::i32ToCharList<2>(toInt32<uint8_t>(minutes)));
                     if (!(true)) {
                         juniper::quit<juniper::unit>();
                     }
-                    juniper::records::recordt_0<juniper::array<uint8_t, 3>, uint32_t> minutesStr = guid313;
+                    juniper::records::recordt_0<juniper::array<uint8_t, 3>, uint32_t> minutesStr = guid312;
                     
-                    juniper::records::recordt_0<juniper::array<uint8_t, 6>, uint32_t> guid315 = CharList::safeConcat<3, 2>(timeHourStrColon, minutesStr);
+                    juniper::records::recordt_0<juniper::array<uint8_t, 6>, uint32_t> guid314 = CharList::safeConcat<3, 2>(timeHourStrColon, minutesStr);
                     if (!(true)) {
                         juniper::quit<juniper::unit>();
                     }
-                    juniper::records::recordt_0<juniper::array<uint8_t, 6>, uint32_t> timeStr = guid315;
+                    juniper::records::recordt_0<juniper::array<uint8_t, 6>, uint32_t> timeStr = guid314;
                     
-                    juniper::tuple4<int16_t, int16_t, uint16_t, uint16_t> guid316 = Gfx::getCharListBounds<5>(((int16_t) 0), ((int16_t) 0), timeStr);
+                    juniper::tuple4<int16_t, int16_t, uint16_t, uint16_t> guid315 = Gfx::getCharListBounds<5>(((int16_t) 0), ((int16_t) 0), timeStr);
                     if (!(true)) {
                         juniper::quit<juniper::unit>();
                     }
-                    uint16_t h = (guid316).e4;
-                    uint16_t w = (guid316).e3;
+                    uint16_t h = (guid315).e4;
+                    uint16_t w = (guid315).e3;
                     
                     Gfx::setCursor(toInt16<uint16_t>(((uint16_t) (((uint16_t) (Arcada::displayWidth() / ((uint16_t) 2))) - ((uint16_t) (w / ((uint16_t) 2)))))), toInt16<uint16_t>(((uint16_t) (((uint16_t) (Arcada::displayHeight() / ((uint16_t) 2))) + ((uint16_t) (h / ((uint16_t) 2)))))));
                     Gfx::printCharList<5>(timeStr);
                     Gfx::setTextSize(((uint8_t) 1));
                     Gfx::setFont(Gfx::freeSans9());
-                    juniper::records::recordt_0<juniper::array<uint8_t, 3>, uint32_t> guid317 = (((bool) (hours < ((uint8_t) 12))) ? 
+                    juniper::records::recordt_0<juniper::array<uint8_t, 3>, uint32_t> guid316 = (((bool) (hours < ((uint8_t) 12))) ? 
                         (([&]() -> juniper::records::recordt_0<juniper::array<uint8_t, 3>, uint32_t>{
-                            juniper::records::recordt_0<juniper::array<uint8_t, 3>, uint32_t> guid318;
-                            guid318.data = (juniper::array<uint8_t, 3> { {((uint8_t) 65), ((uint8_t) 77), ((uint8_t) 0)} });
-                            guid318.length = ((uint32_t) 3);
-                            return guid318;
+                            juniper::records::recordt_0<juniper::array<uint8_t, 3>, uint32_t> guid317;
+                            guid317.data = (juniper::array<uint8_t, 3> { {((uint8_t) 65), ((uint8_t) 77), ((uint8_t) 0)} });
+                            guid317.length = ((uint32_t) 3);
+                            return guid317;
                         })())
                     :
                         (([&]() -> juniper::records::recordt_0<juniper::array<uint8_t, 3>, uint32_t>{
-                            juniper::records::recordt_0<juniper::array<uint8_t, 3>, uint32_t> guid319;
-                            guid319.data = (juniper::array<uint8_t, 3> { {((uint8_t) 80), ((uint8_t) 77), ((uint8_t) 0)} });
-                            guid319.length = ((uint32_t) 3);
-                            return guid319;
+                            juniper::records::recordt_0<juniper::array<uint8_t, 3>, uint32_t> guid318;
+                            guid318.data = (juniper::array<uint8_t, 3> { {((uint8_t) 80), ((uint8_t) 77), ((uint8_t) 0)} });
+                            guid318.length = ((uint32_t) 3);
+                            return guid318;
                         })()));
                     if (!(true)) {
                         juniper::quit<juniper::unit>();
                     }
-                    juniper::records::recordt_0<juniper::array<uint8_t, 3>, uint32_t> ampm = guid317;
+                    juniper::records::recordt_0<juniper::array<uint8_t, 3>, uint32_t> ampm = guid316;
                     
-                    juniper::tuple4<int16_t, int16_t, uint16_t, uint16_t> guid320 = Gfx::getCharListBounds<2>(((int16_t) 0), ((int16_t) 0), ampm);
+                    juniper::tuple4<int16_t, int16_t, uint16_t, uint16_t> guid319 = Gfx::getCharListBounds<2>(((int16_t) 0), ((int16_t) 0), ampm);
                     if (!(true)) {
                         juniper::quit<juniper::unit>();
                     }
-                    uint16_t h2 = (guid320).e4;
-                    uint16_t w2 = (guid320).e3;
+                    uint16_t h2 = (guid319).e4;
+                    uint16_t w2 = (guid319).e3;
                     
                     Gfx::setCursor(toInt16<uint16_t>(((uint16_t) (((uint16_t) (Arcada::displayWidth() / ((uint16_t) 2))) - ((uint16_t) (w2 / ((uint16_t) 2)))))), toInt16<uint16_t>(((uint16_t) (((uint16_t) (((uint16_t) (((uint16_t) (Arcada::displayHeight() / ((uint16_t) 2))) + ((uint16_t) (h / ((uint16_t) 2))))) + h2)) + ((uint16_t) 5)))));
                     Gfx::printCharList<2>(ampm);
-                    juniper::records::recordt_0<juniper::array<uint8_t, 12>, uint32_t> guid321 = CharList::safeConcat<9, 2>(CharList::safeConcat<8, 1>(CharList::safeConcat<5, 3>(CharList::safeConcat<3, 2>(dayOfWeekToCharList(dayOfWeek), (([&]() -> juniper::records::recordt_0<juniper::array<uint8_t, 3>, uint32_t>{
-                        juniper::records::recordt_0<juniper::array<uint8_t, 3>, uint32_t> guid322;
-                        guid322.data = (juniper::array<uint8_t, 3> { {((uint8_t) 44), ((uint8_t) 32), ((uint8_t) 0)} });
-                        guid322.length = ((uint32_t) 3);
-                        return guid322;
+                    juniper::records::recordt_0<juniper::array<uint8_t, 12>, uint32_t> guid320 = CharList::safeConcat<9, 2>(CharList::safeConcat<8, 1>(CharList::safeConcat<5, 3>(CharList::safeConcat<3, 2>(dayOfWeekToCharList(dayOfWeek), (([&]() -> juniper::records::recordt_0<juniper::array<uint8_t, 3>, uint32_t>{
+                        juniper::records::recordt_0<juniper::array<uint8_t, 3>, uint32_t> guid321;
+                        guid321.data = (juniper::array<uint8_t, 3> { {((uint8_t) 44), ((uint8_t) 32), ((uint8_t) 0)} });
+                        guid321.length = ((uint32_t) 3);
+                        return guid321;
                     })())), monthToCharList(month)), (([&]() -> juniper::records::recordt_0<juniper::array<uint8_t, 2>, uint32_t>{
-                        juniper::records::recordt_0<juniper::array<uint8_t, 2>, uint32_t> guid323;
-                        guid323.data = (juniper::array<uint8_t, 2> { {((uint8_t) 32), ((uint8_t) 0)} });
-                        guid323.length = ((uint32_t) 2);
-                        return guid323;
+                        juniper::records::recordt_0<juniper::array<uint8_t, 2>, uint32_t> guid322;
+                        guid322.data = (juniper::array<uint8_t, 2> { {((uint8_t) 32), ((uint8_t) 0)} });
+                        guid322.length = ((uint32_t) 2);
+                        return guid322;
                     })())), CharList::i32ToCharList<2>(toInt32<uint8_t>(day)));
                     if (!(true)) {
                         juniper::quit<juniper::unit>();
                     }
-                    juniper::records::recordt_0<juniper::array<uint8_t, 12>, uint32_t> dateStr = guid321;
+                    juniper::records::recordt_0<juniper::array<uint8_t, 12>, uint32_t> dateStr = guid320;
                     
-                    juniper::tuple4<int16_t, int16_t, uint16_t, uint16_t> guid324 = Gfx::getCharListBounds<11>(((int16_t) 0), ((int16_t) 0), dateStr);
+                    juniper::tuple4<int16_t, int16_t, uint16_t, uint16_t> guid323 = Gfx::getCharListBounds<11>(((int16_t) 0), ((int16_t) 0), dateStr);
                     if (!(true)) {
                         juniper::quit<juniper::unit>();
                     }
-                    uint16_t h3 = (guid324).e4;
-                    uint16_t w3 = (guid324).e3;
+                    uint16_t h3 = (guid323).e4;
+                    uint16_t w3 = (guid323).e3;
                     
                     Gfx::setCursor(cast<uint16_t, int16_t>(((uint16_t) (((uint16_t) (Arcada::displayWidth() / ((uint16_t) 2))) - ((uint16_t) (w3 / ((uint16_t) 2)))))), cast<uint16_t, int16_t>(((uint16_t) (((uint16_t) (((uint16_t) (Arcada::displayHeight() / ((uint16_t) 2))) - ((uint16_t) (h / ((uint16_t) 2))))) - ((uint16_t) 5)))));
                     return Gfx::printCharList<11>(dateStr);
@@ -10551,11 +10550,11 @@ namespace CWatch {
 namespace Gfx {
     juniper::unit fillScreen(juniper::records::recordt_4<uint8_t, uint8_t, uint8_t> c) {
         return (([&]() -> juniper::unit {
-            uint16_t guid325 = rgbToRgb565(c);
+            uint16_t guid324 = rgbToRgb565(c);
             if (!(true)) {
                 juniper::quit<juniper::unit>();
             }
-            uint16_t cPrime = guid325;
+            uint16_t cPrime = guid324;
             
             return (([&]() -> juniper::unit {
                 arcada.getCanvas()->fillScreen(cPrime);
@@ -10568,11 +10567,11 @@ namespace Gfx {
 namespace Gfx {
     juniper::unit drawPixel(int16_t x, int16_t y, juniper::records::recordt_4<uint8_t, uint8_t, uint8_t> c) {
         return (([&]() -> juniper::unit {
-            uint16_t guid326 = rgbToRgb565(c);
+            uint16_t guid325 = rgbToRgb565(c);
             if (!(true)) {
                 juniper::quit<juniper::unit>();
             }
-            uint16_t cPrime = guid326;
+            uint16_t cPrime = guid325;
             
             return (([&]() -> juniper::unit {
                 arcada.getCanvas()->drawPixel(x, y, cPrime);
@@ -10606,38 +10605,38 @@ namespace Gfx {
         return (([&]() -> juniper::unit {
             constexpr int32_t n = c180;
             return (([&]() -> juniper::unit {
-                juniper::tuple4<int16_t, int16_t, uint16_t, uint16_t> guid327 = Gfx::getCharListBounds<(-1)+(c180)>(((int16_t) 0), ((int16_t) 0), cl);
+                juniper::tuple4<int16_t, int16_t, uint16_t, uint16_t> guid326 = Gfx::getCharListBounds<(-1)+(c180)>(((int16_t) 0), ((int16_t) 0), cl);
                 if (!(true)) {
                     juniper::quit<juniper::unit>();
                 }
-                uint16_t h = (guid327).e4;
-                uint16_t w = (guid327).e3;
+                uint16_t h = (guid326).e4;
+                uint16_t w = (guid326).e3;
                 
-                int16_t guid328 = toInt16<uint16_t>(w);
+                int16_t guid327 = toInt16<uint16_t>(w);
                 if (!(true)) {
                     juniper::quit<juniper::unit>();
                 }
-                int16_t ws = guid328;
+                int16_t ws = guid327;
                 
-                int16_t guid329 = toInt16<uint16_t>(h);
+                int16_t guid328 = toInt16<uint16_t>(h);
                 if (!(true)) {
                     juniper::quit<juniper::unit>();
                 }
-                int16_t hs = guid329;
+                int16_t hs = guid328;
                 
                 return (([&]() -> juniper::unit {
-                    Gfx::align guid330 = align;
-                    return (((bool) (((bool) ((guid330).id() == ((uint8_t) 0))) && true)) ? 
+                    Gfx::align guid329 = align;
+                    return (((bool) (((bool) ((guid329).id() == ((uint8_t) 0))) && true)) ? 
                         (([&]() -> juniper::unit {
                             return Gfx::setCursor(((int16_t) (x - ((int16_t) (ws / ((int16_t) 2))))), y);
                         })())
                     :
-                        (((bool) (((bool) ((guid330).id() == ((uint8_t) 1))) && true)) ? 
+                        (((bool) (((bool) ((guid329).id() == ((uint8_t) 1))) && true)) ? 
                             (([&]() -> juniper::unit {
                                 return Gfx::setCursor(x, ((int16_t) (y - ((int16_t) (hs / ((int16_t) 2))))));
                             })())
                         :
-                            (((bool) (((bool) ((guid330).id() == ((uint8_t) 2))) && true)) ? 
+                            (((bool) (((bool) ((guid329).id() == ((uint8_t) 2))) && true)) ? 
                                 (([&]() -> juniper::unit {
                                     return Gfx::setCursor(((int16_t) (x - ((int16_t) (ws / ((int16_t) 2))))), ((int16_t) (y - ((int16_t) (hs / ((int16_t) 2))))));
                                 })())
