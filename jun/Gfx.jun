@@ -85,7 +85,7 @@ fun drawVerticalGradient(x0i : int16, y0i : int16, w : int16, h : int16, c1 : Co
     let g2f = toFloat(g2)
     let b2f = toFloat(b2)
 
-    for (y : int16 in y0 to y1) {
+    for y : int16 in y0 .. y1 {
         let weight1 = toFloat(ymax - y) / toFloat(h)
         let weight2 = 1.0f - weight1
         let gradColor = {
