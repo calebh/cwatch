@@ -1,5 +1,5 @@
 module Gfx
-open(Prelude, Arcada, Color)
+open(Arcada, Color)
 include("<Adafruit_GFX.h>", "<Fonts/FreeSans9pt7b.h>", "<Fonts/FreeSans24pt7b.h>")
 
 type font = defaultFont() | freeSans9() | freeSans24()

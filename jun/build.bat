@@ -1,1 +1,1 @@
-C:\Users\caleb\Documents\juniperproject\Juniper\Juniper\bin\Debug\net6.0\Juniper.exe --keep-unreachable -s Arcada.jun Ble.jun CWatch.jun Gfx.jun -o main2.cpp
+C:\Users\caleb\Documents\juniperproject\Juniper\Juniper\bin\Debug\net6.0\Juniper.exe -s Arcada.jun Ble.jun CWatch.jun Gfx.jun -o main.cpp

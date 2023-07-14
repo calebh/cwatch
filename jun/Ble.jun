@@ -1,5 +1,4 @@
 module Ble
-open(Prelude)
 include("<bluefruit.h>", "<bluefruit_common.h>")
 
 type servicet = service(rawpointer)

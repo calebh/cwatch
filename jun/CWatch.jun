@@ -1,5 +1,4 @@
 module CWatch
-open(Prelude)
 include("<bluefruit.h>")
 
 #
@@ -207,12 +206,15 @@ fun processBluetoothUpdates() = {
     let mut hasNewDayDateTime = false
     let mut hasNewDayOfWeek = false
     #
+    // rawHasNewDayDateTime and rawHasNewDayOfWeek are C/C++ global
+    // variables that we defined previously. These variables are set
+    // to true when the smartphone has finished writing data
     hasNewDayDateTime = rawHasNewDayDateTime;
     rawHasNewDayDateTime = false;
     hasNewDayOfWeek = rawHasNewDayOfWeek;
     rawHasNewDayOfWeek = false;
     #
-    if (hasNewDayDateTime) {
+    if hasNewDayDateTime {
         let bleData : dayDateTimeBLE = Ble:readGeneric(dayDateTimeCharacterstic)
         clockState->month =
             match bleData.month {
@@ -236,7 +238,7 @@ fun processBluetoothUpdates() = {
         clockState->minutes = bleData.minutes
         clockState->seconds = bleData.seconds
     }
-    if (hasNewDayOfWeek) {
+    if hasNewDayOfWeek {
         let bleData : dayOfWeekBLE = Ble:readGeneric(dayOfWeekCharacterstic)
         clockState->dayOfWeek =
             match bleData.dayOfWeek {

@@ -1,5 +1,4 @@
 module Arcada
-open(Prelude)
 include("\"Adafruit_Arcada.h\"")
 
 #
