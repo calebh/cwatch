@@ -1,0 +1,7 @@
+<resources>
+    <string name="app_name">CWatch</string>
+    <string name="scan">Scan</string>
+    <string name="title_location_permission">Location Permission Requested</string>
+    <string name="text_location_permission">Location permission is needed for bluetooth low energy scanning</string>
+    <string name="ok">Okay</string>
+</resources>
