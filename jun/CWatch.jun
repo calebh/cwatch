@@ -24,24 +24,33 @@ alias dayDateTimeBLE = packed { month : uint8, day : uint8, year : uint32, hours
 alias dayOfWeekBLE = packed { dayOfWeek : uint8 }
 
 let timeService = {
-    var p : rawpointer
+    var p
     #p = (void *) &rawTimeService;#
     Ble:service(p)
 }
 
 let dayDateTimeCharacterstic = {
-    var p : rawpointer
+    var p
     #p = (void *) &rawDayDateTimeCharacterstic;#
     Ble:characterstic(p)
 }
 
 let dayOfWeekCharacterstic = {
-    var p : rawpointer
+    var p
     #p = (void *) &rawDayOfWeek;#
     Ble:characterstic(p)
 }
 
+fun test() = {
+    var myPtr : ptr
+    #myPtr = (void *) new int(10);#
+    makerc(myPtr, (p) => #delete ((int *) p);#)
+}
+
+let foo = ref 0u32
+
 fun setup() = {
+    *foo = 10
     Arcada:arcadaBegin()
     Arcada:displayBegin()
     Arcada:setBacklight(255)
@@ -199,8 +208,8 @@ fun secondTick(d : datetime) = {
     {month := month2, day := day2, year := year2, hours := hours2, minutes := minutes2, seconds := seconds2, dayOfWeek := dayOfWeek2}
 }
 
-let clockTickerState = Time:state()
-let clockState = ref ({month := september(), day := 9, year := 2020, hours := 18, minutes := 40, seconds := 0, dayOfWeek := wednesday()} : datetime)
+let mut clockTickerState = Time:state
+let mut clockState = {month := september(), day := 9, year := 2020, hours := 18, minutes := 40, seconds := 0, dayOfWeek := wednesday()} : datetime
 
 fun processBluetoothUpdates() = {
     let mut hasNewDayDateTime = false
@@ -216,7 +225,7 @@ fun processBluetoothUpdates() = {
     #
     if hasNewDayDateTime {
         let bleData : dayDateTimeBLE = Ble:readGeneric(dayDateTimeCharacterstic)
-        clockState->month =
+        clockState.month =
             match bleData.month {
                 0 => january()
                 1 => february()
@@ -232,15 +241,15 @@ fun processBluetoothUpdates() = {
                 11 => december()
                 _ => january()
             }
-        clockState->day = bleData.day
-        clockState->year = bleData.year
-        clockState->hours = bleData.hours
-        clockState->minutes = bleData.minutes
-        clockState->seconds = bleData.seconds
+        clockState.day = bleData.day
+        clockState.year = bleData.year
+        clockState.hours = bleData.hours
+        clockState.minutes = bleData.minutes
+        clockState.seconds = bleData.seconds
     }
     if hasNewDayOfWeek {
         let bleData : dayOfWeekBLE = Ble:readGeneric(dayOfWeekCharacterstic)
-        clockState->dayOfWeek =
+        clockState.dayOfWeek =
             match bleData.dayOfWeek {
                 0 => sunday()
                 1 => monday()
@@ -259,9 +268,9 @@ fun loop() = {
 
     processBluetoothUpdates()
 
-    Time:every(1000u32, clockTickerState) |>
-    Signal:foldP((t, dt) => secondTick(dt), clockState) |>
-    Signal:latch(clockState) |>
+    Time:every(1000u32, inout clockTickerState) |>
+    Signal:foldP((t, dt) => secondTick(dt), inout clockState) |>
+    Signal:latch(inout clockState) |>
     Signal:sink((dt) => {
         let {month := month, day := day, year := year, hours := hours, minutes := minutes, seconds := seconds, dayOfWeek := dayOfWeek} = dt
 

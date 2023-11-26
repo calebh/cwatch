@@ -1,8 +1,8 @@
 module Ble
 include("<bluefruit.h>", "<bluefruit_common.h>")
 
-type servicet = service(rawpointer)
-type characterstict = characterstic(rawpointer)
+type servicet = service(ptr)
+type characterstict = characterstic(ptr)
 
 type advertisingFlagt = advertisingFlag(uint8)
 type appearancet = appearance(uint16)

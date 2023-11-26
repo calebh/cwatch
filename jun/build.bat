@@ -1,1 +1,1 @@
-C:\Users\caleb\Documents\juniperproject\Juniper\Juniper\bin\Debug\net6.0\Juniper.exe -s Arcada.jun Ble.jun CWatch.jun Gfx.jun -o main.cpp
+Juniper.exe -s Arcada.jun Ble.jun CWatch.jun Gfx.jun -o main.cpp

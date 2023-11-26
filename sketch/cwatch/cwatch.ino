@@ -1,4 +1,4 @@
-//Compiled on 7/15/2023 4:31:58 PM
+//Compiled on 11/25/2023 9:04:55 PM
 #include <inttypes.h>
 #include <stdbool.h>
 #include <new>
@@ -17,19 +17,23 @@ void* operator new(size_t size, void* ptr)
 
 namespace juniper
 {
-    template<typename contained>
-    struct wrapped_ptr {
+    template<typename A>
+    struct counted_cell {
         int ref_count;
-        contained data;
+        A data;
 
-        wrapped_ptr(contained init_data)
+        counted_cell(A init_data)
             : ref_count(1), data(init_data) {}
+
+        void destroy() {
+            data.destroy();
+        }
     };
 
-    template <typename contained>
+    template <template <typename> class T, typename contained>
     class shared_ptr {
     private:
-        wrapped_ptr<contained> *content;
+        counted_cell<T<contained>>* content;
 
         void inc_ref() {
             if (content != nullptr) {
@@ -42,6 +46,7 @@ namespace juniper
                 content->ref_count--;
 
                 if (content->ref_count <= 0) {
+                    content->destroy();
                     delete content;
                     content = nullptr;
                 }
@@ -54,8 +59,8 @@ namespace juniper
         {
         }
 
-        shared_ptr(contained init_data)
-            : content(new wrapped_ptr<contained>(init_data))
+        shared_ptr(T<contained> init_data)
+            : content(new counted_cell<T<contained>>(init_data))
         {
         }
 
@@ -81,15 +86,16 @@ namespace juniper
 
         contained* get() {
             if (content != nullptr) {
-                return &(content->data);
-            } else {
+                return content->data.get();
+            }
+            else {
                 return nullptr;
             }
         }
 
         const contained* get() const {
             if (content != nullptr) {
-                return &(content->data);
+                return content->data.get();
             } else {
                 return nullptr;
             }
@@ -134,7 +140,7 @@ namespace juniper
             return content != rhs.content;
         }
     };
-    
+
     template <typename ClosureType, typename Result, typename ...Args>
     class function;
 
@@ -205,26 +211,49 @@ namespace juniper
         }
     };
 
-    class rawpointer_container {
+    // A basic container that doesn't do anything special to destroy
+    // the contained data when the reference count drops to 0. This
+    // is used for ref types.
+    template <typename contained>
+    class basic_container {
     private:
-        void* data;
-        function<void, unit(void*)> destructorCallback;
+        contained data;
 
     public:
-        rawpointer_container(void* initData, function<void, unit(void*)> callback)
-            : data(initData), destructorCallback(callback) {}
+        basic_container(contained initData)
+            : data(initData) {}
 
-        ~rawpointer_container() {
-            destructorCallback(data);
-        }
+        void destroy() {}
 
-        void *get() { return data; }
+        contained *get() { return &data;  }
     };
 
-    using smartpointer = shared_ptr<rawpointer_container>;
+    // A container that calls a finalizer once the reference count
+    // drops to 0. This is used for rcptr types.
+    template <typename contained>
+    class finalized_container {
+    private:
+        contained data;
+        function<void, unit(void*)> finalizer;
 
-    smartpointer make_smartpointer(void *initData, function<void, unit(void*)> callback) {
-        return smartpointer(rawpointer_container(initData, callback));
+    public:
+        finalized_container(void* initData, function<void, unit(contained)> initFinalizer)
+            : data(initData), finalizer(initFinalizer) {}
+
+        void destroy() {
+            finalizer(data);
+        }
+
+        contained *get() { return &data; }
+    };
+
+    template <typename contained>
+    using refcell = shared_ptr<basic_container, contained>;
+
+    using rcptr = shared_ptr<finalized_container, void*>;
+
+    rcptr make_rcptr(void* initData, function<void, unit(void*)> finalizer) {
+        return rcptr(finalized_container<void *>(initData, finalizer));
     }
 
     template<typename T>
@@ -269,7 +298,8 @@ namespace juniper
         {
             if (n == id) {
                 reinterpret_cast<F*>(data)->~F();
-            } else {
+            }
+            else {
                 variant_helper_rec<n + 1, Ts...>::destroy(id, data);
             }
         }
@@ -279,7 +309,8 @@ namespace juniper
             if (n == id) {
                 // This static_cast and use of remove_reference is equivalent to the use of std::move
                 new (to) F(static_cast<typename remove_reference<F>::type&&>(*reinterpret_cast<F*>(from)));
-            } else {
+            }
+            else {
                 variant_helper_rec<n + 1, Ts...>::move(id, from, to);
             }
         }
@@ -288,7 +319,8 @@ namespace juniper
         {
             if (n == id) {
                 new (to) F(*reinterpret_cast<const F*>(from));
-            } else {
+            }
+            else {
                 variant_helper_rec<n + 1, Ts...>::copy(id, from, to);
             }
         }
@@ -297,7 +329,8 @@ namespace juniper
         {
             if (n == id) {
                 return (*reinterpret_cast<F*>(lhs)) == (*reinterpret_cast<F*>(rhs));
-            } else {
+            }
+            else {
                 return variant_helper_rec<n + 1, Ts...>::equal(id, lhs, rhs);
             }
         }
@@ -391,7 +424,7 @@ namespace juniper
             variant_helper_static<alternative<i>>::copy(&value, &ret.data);
             return ret;
         }
-        
+
         template<unsigned char i>
         static variant create(alternative<i>&& value) {
             variant ret(i);
@@ -452,7 +485,8 @@ namespace juniper
         {
             if (variant_id == i) {
                 return *reinterpret_cast<alternative<i>*>(&data);
-            } else {
+            }
+            else {
                 return quit<alternative<i>&>();
             }
         }
@@ -464,7 +498,8 @@ namespace juniper
         bool operator==(variant& rhs) {
             if (variant_id == rhs.variant_id) {
                 return helper_t::equal(variant_id, &data, &rhs.data);
-            } else {
+            }
+            else {
                 return false;
             }
         }
@@ -472,7 +507,8 @@ namespace juniper
         bool operator==(variant&& rhs) {
             if (variant_id == rhs.variant_id) {
                 return helper_t::equal(variant_id, &data, &rhs.data);
-            } else {
+            }
+            else {
                 return false;
             }
         }
@@ -493,11 +529,11 @@ namespace juniper
 
         tuple2(a initE1, b initE2) : e1(initE1), e2(initE2) {}
 
-        bool operator==(tuple2<a,b> rhs) {
+        bool operator==(tuple2<a, b> rhs) {
             return e1 == rhs.e1 && e2 == rhs.e2;
         }
 
-        bool operator!=(tuple2<a,b> rhs) {
+        bool operator!=(tuple2<a, b> rhs) {
             return !(rhs == *this);
         }
     };
@@ -510,11 +546,11 @@ namespace juniper
 
         tuple3(a initE1, b initE2, c initE3) : e1(initE1), e2(initE2), e3(initE3) {}
 
-        bool operator==(tuple3<a,b,c> rhs) {
+        bool operator==(tuple3<a, b, c> rhs) {
             return e1 == rhs.e1 && e2 == rhs.e2 && e3 == rhs.e3;
         }
 
-        bool operator!=(tuple3<a,b,c> rhs) {
+        bool operator!=(tuple3<a, b, c> rhs) {
             return !(rhs == *this);
         }
     };
@@ -528,11 +564,11 @@ namespace juniper
 
         tuple4(a initE1, b initE2, c initE3, d initE4) : e1(initE1), e2(initE2), e3(initE3), e4(initE4) {}
 
-        bool operator==(tuple4<a,b,c,d> rhs) {
+        bool operator==(tuple4<a, b, c, d> rhs) {
             return e1 == rhs.e1 && e2 == rhs.e2 && e3 == rhs.e3 && e4 == rhs.e4;
         }
 
-        bool operator!=(tuple4<a,b,c,d> rhs) {
+        bool operator!=(tuple4<a, b, c, d> rhs) {
             return !(rhs == *this);
         }
     };
@@ -547,11 +583,11 @@ namespace juniper
 
         tuple5(a initE1, b initE2, c initE3, d initE4, e initE5) : e1(initE1), e2(initE2), e3(initE3), e4(initE4), e5(initE5) {}
 
-        bool operator==(tuple5<a,b,c,d,e> rhs) {
+        bool operator==(tuple5<a, b, c, d, e> rhs) {
             return e1 == rhs.e1 && e2 == rhs.e2 && e3 == rhs.e3 && e4 == rhs.e4 && e5 == rhs.e5;
         }
 
-        bool operator!=(tuple5<a,b,c,d,e> rhs) {
+        bool operator!=(tuple5<a, b, c, d, e> rhs) {
             return !(rhs == *this);
         }
     };
@@ -567,11 +603,11 @@ namespace juniper
 
         tuple6(a initE1, b initE2, c initE3, d initE4, e initE5, f initE6) : e1(initE1), e2(initE2), e3(initE3), e4(initE4), e5(initE5), e6(initE6) {}
 
-        bool operator==(tuple6<a,b,c,d,e,f> rhs) {
+        bool operator==(tuple6<a, b, c, d, e, f> rhs) {
             return e1 == rhs.e1 && e2 == rhs.e2 && e3 == rhs.e3 && e4 == rhs.e4 && e5 == rhs.e5 && e6 == rhs.e6;
         }
 
-        bool operator!=(tuple6<a,b,c,d,e,f> rhs) {
+        bool operator!=(tuple6<a, b, c, d, e, f> rhs) {
             return !(rhs == *this);
         }
     };
@@ -588,11 +624,11 @@ namespace juniper
 
         tuple7(a initE1, b initE2, c initE3, d initE4, e initE5, f initE6, g initE7) : e1(initE1), e2(initE2), e3(initE3), e4(initE4), e5(initE5), e6(initE6), e7(initE7) {}
 
-        bool operator==(tuple7<a,b,c,d,e,f,g> rhs) {
+        bool operator==(tuple7<a, b, c, d, e, f, g> rhs) {
             return e1 == rhs.e1 && e2 == rhs.e2 && e3 == rhs.e3 && e4 == rhs.e4 && e5 == rhs.e5 && e6 == rhs.e6 && e7 == rhs.e7;
         }
 
-        bool operator!=(tuple7<a,b,c,d,e,f,g> rhs) {
+        bool operator!=(tuple7<a, b, c, d, e, f, g> rhs) {
             return !(rhs == *this);
         }
     };
@@ -610,11 +646,11 @@ namespace juniper
 
         tuple8(a initE1, b initE2, c initE3, d initE4, e initE5, f initE6, g initE7, h initE8) : e1(initE1), e2(initE2), e3(initE3), e4(initE4), e5(initE5), e6(initE6), e7(initE7), e8(initE8) {}
 
-        bool operator==(tuple8<a,b,c,d,e,f,g,h> rhs) {
+        bool operator==(tuple8<a, b, c, d, e, f, g, h> rhs) {
             return e1 == rhs.e1 && e2 == rhs.e2 && e3 == rhs.e3 && e4 == rhs.e4 && e5 == rhs.e5 && e6 == rhs.e6 && e7 == rhs.e7 && e8 == rhs.e8;
         }
 
-        bool operator!=(tuple8<a,b,c,d,e,f,g,h> rhs) {
+        bool operator!=(tuple8<a, b, c, d, e, f, g, h> rhs) {
             return !(rhs == *this);
         }
     };
@@ -633,11 +669,11 @@ namespace juniper
 
         tuple9(a initE1, b initE2, c initE3, d initE4, e initE5, f initE6, g initE7, h initE8, i initE9) : e1(initE1), e2(initE2), e3(initE3), e4(initE4), e5(initE5), e6(initE6), e7(initE7), e8(initE8), e9(initE9) {}
 
-        bool operator==(tuple9<a,b,c,d,e,f,g,h,i> rhs) {
+        bool operator==(tuple9<a, b, c, d, e, f, g, h, i> rhs) {
             return e1 == rhs.e1 && e2 == rhs.e2 && e3 == rhs.e3 && e4 == rhs.e4 && e5 == rhs.e5 && e6 == rhs.e6 && e7 == rhs.e7 && e8 == rhs.e8 && e9 == rhs.e9;
         }
 
-        bool operator!=(tuple9<a,b,c,d,e,f,g,h,i> rhs) {
+        bool operator!=(tuple9<a, b, c, d, e, f, g, h, i> rhs) {
             return !(rhs == *this);
         }
     };
@@ -657,11 +693,11 @@ namespace juniper
 
         tuple10(a initE1, b initE2, c initE3, d initE4, e initE5, f initE6, g initE7, h initE8, i initE9, j initE10) : e1(initE1), e2(initE2), e3(initE3), e4(initE4), e5(initE5), e6(initE6), e7(initE7), e8(initE8), e9(initE9), e10(initE10) {}
 
-        bool operator==(tuple10<a,b,c,d,e,f,g,h,i,j> rhs) {
+        bool operator==(tuple10<a, b, c, d, e, f, g, h, i, j> rhs) {
             return e1 == rhs.e1 && e2 == rhs.e2 && e3 == rhs.e3 && e4 == rhs.e4 && e5 == rhs.e5 && e6 == rhs.e6 && e7 == rhs.e7 && e8 == rhs.e8 && e9 == rhs.e9 && e10 == rhs.e10;
         }
 
-        bool operator!=(tuple10<a,b,c,d,e,f,g,h,i,j> rhs) {
+        bool operator!=(tuple10<a, b, c, d, e, f, g, h, i, j> rhs) {
             return !(rhs == *this);
         }
     };
@@ -1005,16 +1041,6 @@ namespace juniper {
 
 namespace juniper {
     namespace closures {
-        template<typename T1,typename T2>
-        struct closuret_8 {
-            T1 buttonState;
-            T2 delay;
-
-
-            closuret_8(T1 init_buttonState, T2 init_delay) :
-                buttonState(init_buttonState), delay(init_delay) {}
-        };
-
         template<typename T1>
         struct closuret_1 {
             T1 f;
@@ -1056,39 +1082,21 @@ namespace juniper {
         };
 
         template<typename T1>
-        struct closuret_4 {
-            T1 maybePrevValue;
-
-
-            closuret_4(T1 init_maybePrevValue) :
-                maybePrevValue(init_maybePrevValue) {}
-        };
-
-        template<typename T1>
-        struct closuret_6 {
+        struct closuret_5 {
             T1 pin;
 
 
-            closuret_6(T1 init_pin) :
+            closuret_5(T1 init_pin) :
                 pin(init_pin) {}
         };
 
-        template<typename T1>
-        struct closuret_7 {
-            T1 prevState;
-
-
-            closuret_7(T1 init_prevState) :
-                prevState(init_prevState) {}
-        };
-
         template<typename T1,typename T2>
-        struct closuret_5 {
+        struct closuret_4 {
             T1 val1;
             T2 val2;
 
 
-            closuret_5(T1 init_val1, T2 init_val2) :
+            closuret_4(T1 init_val1, T2 init_val2) :
                 val1(init_val1), val2(init_val2) {}
         };
 
@@ -1924,62 +1932,71 @@ namespace Gfx {
 }
 
 namespace Prelude {
-    void * extractptr(juniper::smartpointer p);
+    void * extractptr(juniper::rcptr p);
 }
 
 namespace Prelude {
-    template<typename t39, typename t40, typename t41, typename t42, typename t44>
-    juniper::function<juniper::closures::closuret_0<juniper::function<t41, t40(t39)>, juniper::function<t42, t39(t44)>>, t40(t44)> compose(juniper::function<t41, t40(t39)> f, juniper::function<t42, t39(t44)> g);
+    juniper::rcptr makerc(void * p, juniper::function<void, juniper::unit(void *)> finalizer);
 }
 
 namespace Prelude {
-    template<typename t57, typename t58, typename t61, typename t62>
-    juniper::function<juniper::closures::closuret_1<juniper::function<t58, t57(t61, t62)>>, juniper::function<juniper::closures::closuret_2<juniper::function<t58, t57(t61, t62)>, t61>, t57(t62)>(t61)> curry(juniper::function<t58, t57(t61, t62)> f);
+    template<typename t48, typename t49, typename t50, typename t51, typename t53>
+    juniper::function<juniper::closures::closuret_0<juniper::function<t51, t49(t48)>, juniper::function<t50, t48(t53)>>, t49(t53)> compose(juniper::function<t51, t49(t48)> f, juniper::function<t50, t48(t53)> g);
 }
 
 namespace Prelude {
-    template<typename t73, typename t74, typename t75, typename t77, typename t78>
-    juniper::function<juniper::closures::closuret_1<juniper::function<t74, juniper::function<t75, t73(t78)>(t77)>>, t73(t77, t78)> uncurry(juniper::function<t74, juniper::function<t75, t73(t78)>(t77)> f);
+    template<typename t61>
+    t61 id(t61 x);
 }
 
 namespace Prelude {
-    template<typename t100, typename t93, typename t94, typename t98, typename t99>
-    juniper::function<juniper::closures::closuret_1<juniper::function<t94, t93(t98, t99, t100)>>, juniper::function<juniper::closures::closuret_2<juniper::function<t94, t93(t98, t99, t100)>, t98>, juniper::function<juniper::closures::closuret_3<juniper::function<t94, t93(t98, t99, t100)>, t98, t99>, t93(t100)>(t99)>(t98)> curry3(juniper::function<t94, t93(t98, t99, t100)> f);
+    template<typename t68, typename t69, typename t72, typename t73>
+    juniper::function<juniper::closures::closuret_1<juniper::function<t69, t68(t72, t73)>>, juniper::function<juniper::closures::closuret_2<juniper::function<t69, t68(t72, t73)>, t72>, t68(t73)>(t72)> curry(juniper::function<t69, t68(t72, t73)> f);
 }
 
 namespace Prelude {
-    template<typename t114, typename t115, typename t116, typename t117, typename t119, typename t120, typename t121>
-    juniper::function<juniper::closures::closuret_1<juniper::function<t115, juniper::function<t116, juniper::function<t117, t114(t121)>(t120)>(t119)>>, t114(t119, t120, t121)> uncurry3(juniper::function<t115, juniper::function<t116, juniper::function<t117, t114(t121)>(t120)>(t119)> f);
+    template<typename t84, typename t85, typename t86, typename t88, typename t89>
+    juniper::function<juniper::closures::closuret_1<juniper::function<t85, juniper::function<t86, t84(t89)>(t88)>>, t84(t88, t89)> uncurry(juniper::function<t85, juniper::function<t86, t84(t89)>(t88)> f);
 }
 
 namespace Prelude {
-    template<typename t132>
-    bool eq(t132 x, t132 y);
+    template<typename t104, typename t106, typename t109, typename t110, typename t111>
+    juniper::function<juniper::closures::closuret_1<juniper::function<t106, t104(t109, t110, t111)>>, juniper::function<juniper::closures::closuret_2<juniper::function<t106, t104(t109, t110, t111)>, t109>, juniper::function<juniper::closures::closuret_3<juniper::function<t106, t104(t109, t110, t111)>, t109, t110>, t104(t111)>(t110)>(t109)> curry3(juniper::function<t106, t104(t109, t110, t111)> f);
 }
 
 namespace Prelude {
-    template<typename t138>
-    bool neq(t138 x, t138 y);
+    template<typename t125, typename t126, typename t127, typename t128, typename t130, typename t131, typename t132>
+    juniper::function<juniper::closures::closuret_1<juniper::function<t126, juniper::function<t127, juniper::function<t128, t125(t132)>(t131)>(t130)>>, t125(t130, t131, t132)> uncurry3(juniper::function<t126, juniper::function<t127, juniper::function<t128, t125(t132)>(t131)>(t130)> f);
 }
 
 namespace Prelude {
-    template<typename t144, typename t145>
-    bool gt(t144 x, t145 y);
+    template<typename t143>
+    bool eq(t143 x, t143 y);
 }
 
 namespace Prelude {
-    template<typename t151, typename t152>
-    bool geq(t151 x, t152 y);
+    template<typename t148>
+    bool neq(t148 x, t148 y);
 }
 
 namespace Prelude {
-    template<typename t158, typename t159>
-    bool lt(t158 x, t159 y);
+    template<typename t155, typename t156>
+    bool gt(t156 x, t155 y);
 }
 
 namespace Prelude {
-    template<typename t165, typename t166>
-    bool leq(t165 x, t166 y);
+    template<typename t162, typename t163>
+    bool geq(t163 x, t162 y);
+}
+
+namespace Prelude {
+    template<typename t169, typename t170>
+    bool lt(t170 x, t169 y);
+}
+
+namespace Prelude {
+    template<typename t176, typename t177>
+    bool leq(t177 x, t176 y);
 }
 
 namespace Prelude {
@@ -1995,68 +2012,83 @@ namespace Prelude {
 }
 
 namespace Prelude {
-    template<typename t189, typename t190, typename t191>
-    t190 apply(juniper::function<t191, t190(t189)> f, t189 x);
+    template<typename t200, typename t201, typename t202>
+    t201 apply(juniper::function<t202, t201(t200)> f, t200 x);
 }
 
 namespace Prelude {
-    template<typename t197, typename t198, typename t199, typename t200>
-    t199 apply2(juniper::function<t200, t199(t197, t198)> f, juniper::tuple2<t197, t198> tup);
+    template<typename t208, typename t209, typename t210, typename t211>
+    t210 apply2(juniper::function<t211, t210(t208, t209)> f, juniper::tuple2<t208, t209> tup);
 }
 
 namespace Prelude {
-    template<typename t211, typename t212, typename t213, typename t214, typename t215>
-    t214 apply3(juniper::function<t215, t214(t211, t212, t213)> f, juniper::tuple3<t211, t212, t213> tup);
+    template<typename t222, typename t223, typename t224, typename t225, typename t226>
+    t225 apply3(juniper::function<t226, t225(t222, t223, t224)> f, juniper::tuple3<t222, t223, t224> tup);
 }
 
 namespace Prelude {
-    template<typename t229, typename t230, typename t231, typename t232, typename t233, typename t234>
-    t233 apply4(juniper::function<t234, t233(t229, t230, t231, t232)> f, juniper::tuple4<t229, t230, t231, t232> tup);
+    template<typename t240, typename t241, typename t242, typename t243, typename t244, typename t245>
+    t244 apply4(juniper::function<t245, t244(t240, t241, t242, t243)> f, juniper::tuple4<t240, t241, t242, t243> tup);
 }
 
 namespace Prelude {
-    template<typename t250, typename t251>
-    t250 fst(juniper::tuple2<t250, t251> tup);
+    template<typename t261, typename t262>
+    t261 fst(juniper::tuple2<t261, t262> tup);
 }
 
 namespace Prelude {
-    template<typename t255, typename t256>
-    t256 snd(juniper::tuple2<t255, t256> tup);
+    template<typename t266, typename t267>
+    t267 snd(juniper::tuple2<t266, t267> tup);
 }
 
 namespace Prelude {
-    template<typename t260>
-    t260 add(t260 numA, t260 numB);
+    template<typename t271>
+    t271 add(t271 numA, t271 numB);
 }
 
 namespace Prelude {
-    template<typename t262>
-    t262 sub(t262 numA, t262 numB);
+    template<typename t273>
+    t273 sub(t273 numA, t273 numB);
 }
 
 namespace Prelude {
-    template<typename t264>
-    t264 mul(t264 numA, t264 numB);
+    template<typename t275>
+    t275 mul(t275 numA, t275 numB);
 }
 
 namespace Prelude {
-    template<typename t266>
-    t266 div(t266 numA, t266 numB);
+    template<typename t277>
+    t277 div(t277 numA, t277 numB);
 }
 
 namespace Prelude {
-    template<typename t272, typename t273>
-    juniper::tuple2<t273, t272> swap(juniper::tuple2<t272, t273> tup);
+    template<typename t283, typename t284>
+    juniper::tuple2<t284, t283> swap(juniper::tuple2<t283, t284> tup);
 }
 
 namespace Prelude {
-    template<typename t279, typename t280, typename t281>
-    t279 until(juniper::function<t280, bool(t279)> p, juniper::function<t281, t279(t279)> f, t279 a0);
+    template<typename t290, typename t291, typename t292>
+    t290 until(juniper::function<t292, bool(t290)> p, juniper::function<t291, t290(t290)> f, t290 a0);
 }
 
 namespace Prelude {
-    template<typename t290>
-    juniper::unit ignore(t290 val);
+    template<typename t301>
+    juniper::unit ignore(t301 val);
+}
+
+namespace Prelude {
+    template<typename t304>
+    juniper::unit clear(t304& val);
+}
+
+namespace Prelude {
+    template<typename t306, int c4>
+    juniper::array<t306, c4> array(t306 elem);
+}
+
+namespace Prelude {
+    template<typename t312, int c6>
+    juniper::array<t312, c6> zeros();
 }
 
 namespace Prelude {
@@ -2284,308 +2316,410 @@ namespace Prelude {
 }
 
 namespace Prelude {
-    template<typename t349>
-    uint8_t toUInt8(t349 n);
-}
-
-namespace Prelude {
-    template<typename t351>
-    int8_t toInt8(t351 n);
-}
-
-namespace Prelude {
-    template<typename t353>
-    uint16_t toUInt16(t353 n);
-}
-
-namespace Prelude {
-    template<typename t355>
-    int16_t toInt16(t355 n);
-}
-
-namespace Prelude {
-    template<typename t357>
-    uint32_t toUInt32(t357 n);
-}
-
-namespace Prelude {
-    template<typename t359>
-    int32_t toInt32(t359 n);
-}
-
-namespace Prelude {
-    template<typename t361>
-    float toFloat(t361 n);
-}
-
-namespace Prelude {
-    template<typename t363>
-    double toDouble(t363 n);
-}
-
-namespace Prelude {
-    template<typename t365>
-    t365 fromUInt8(uint8_t n);
-}
-
-namespace Prelude {
-    template<typename t367>
-    t367 fromInt8(int8_t n);
-}
-
-namespace Prelude {
-    template<typename t369>
-    t369 fromUInt16(uint16_t n);
-}
-
-namespace Prelude {
-    template<typename t371>
-    t371 fromInt16(int16_t n);
-}
-
-namespace Prelude {
-    template<typename t373>
-    t373 fromUInt32(uint32_t n);
-}
-
-namespace Prelude {
     template<typename t375>
-    t375 fromInt32(int32_t n);
+    uint8_t toUInt8(t375 n);
 }
 
 namespace Prelude {
     template<typename t377>
-    t377 fromFloat(float n);
+    int8_t toInt8(t377 n);
 }
 
 namespace Prelude {
     template<typename t379>
-    t379 fromDouble(double n);
+    uint16_t toUInt16(t379 n);
 }
 
 namespace Prelude {
-    template<typename t381, typename t382>
-    t382 cast(t381 x);
+    template<typename t381>
+    int16_t toInt16(t381 n);
+}
+
+namespace Prelude {
+    template<typename t383>
+    uint32_t toUInt32(t383 n);
+}
+
+namespace Prelude {
+    template<typename t385>
+    int32_t toInt32(t385 n);
+}
+
+namespace Prelude {
+    template<typename t387>
+    float toFloat(t387 n);
+}
+
+namespace Prelude {
+    template<typename t389>
+    double toDouble(t389 n);
+}
+
+namespace Prelude {
+    template<typename t391>
+    t391 fromUInt8(uint8_t n);
+}
+
+namespace Prelude {
+    template<typename t393>
+    t393 fromInt8(int8_t n);
+}
+
+namespace Prelude {
+    template<typename t395>
+    t395 fromUInt16(uint16_t n);
+}
+
+namespace Prelude {
+    template<typename t397>
+    t397 fromInt16(int16_t n);
+}
+
+namespace Prelude {
+    template<typename t399>
+    t399 fromUInt32(uint32_t n);
+}
+
+namespace Prelude {
+    template<typename t401>
+    t401 fromInt32(int32_t n);
+}
+
+namespace Prelude {
+    template<typename t403>
+    t403 fromFloat(float n);
+}
+
+namespace Prelude {
+    template<typename t405>
+    t405 fromDouble(double n);
+}
+
+namespace Prelude {
+    template<typename t407, typename t408>
+    t408 cast(t407 x);
 }
 
 namespace List {
-    template<typename t387, typename t390, typename t394, int c4>
-    juniper::records::recordt_0<juniper::array<t394, c4>, uint32_t> map(juniper::function<t387, t394(t390)> f, juniper::records::recordt_0<juniper::array<t390, c4>, uint32_t> lst);
+    template<typename t411, int c7>
+    juniper::records::recordt_0<juniper::array<t411, c7>, uint32_t> empty();
 }
 
 namespace List {
-    template<typename t398, typename t400, typename t403, int c7>
-    t398 foldl(juniper::function<t400, t398(t403, t398)> f, t398 initState, juniper::records::recordt_0<juniper::array<t403, c7>, uint32_t> lst);
+    template<typename t418, typename t419, typename t425, int c9>
+    juniper::records::recordt_0<juniper::array<t418, c9>, uint32_t> map(juniper::function<t419, t418(t425)> f, juniper::records::recordt_0<juniper::array<t425, c9>, uint32_t> lst);
 }
 
 namespace List {
-    template<typename t410, typename t412, typename t418, int c9>
-    t410 foldr(juniper::function<t412, t410(t418, t410)> f, t410 initState, juniper::records::recordt_0<juniper::array<t418, c9>, uint32_t> lst);
+    template<typename t433, typename t435, typename t438, int c13>
+    t433 fold(juniper::function<t435, t433(t438, t433)> f, t433 initState, juniper::records::recordt_0<juniper::array<t438, c13>, uint32_t> lst);
 }
 
 namespace List {
-    template<typename t435, int c11, int c12, int c13>
-    juniper::records::recordt_0<juniper::array<t435, c13>, uint32_t> append(juniper::records::recordt_0<juniper::array<t435, c11>, uint32_t> lstA, juniper::records::recordt_0<juniper::array<t435, c12>, uint32_t> lstB);
+    template<typename t445, typename t447, typename t453, int c15>
+    t445 foldBack(juniper::function<t447, t445(t453, t445)> f, t445 initState, juniper::records::recordt_0<juniper::array<t453, c15>, uint32_t> lst);
 }
 
 namespace List {
-    template<typename t448, int c18>
-    Prelude::maybe<t448> nth(uint32_t i, juniper::records::recordt_0<juniper::array<t448, c18>, uint32_t> lst);
+    template<typename t461, typename t463, int c17>
+    t463 reduce(juniper::function<t461, t463(t463, t463)> f, juniper::records::recordt_0<juniper::array<t463, c17>, uint32_t> lst);
 }
 
 namespace List {
-    template<typename t460, int c20, int c21>
-    juniper::records::recordt_0<juniper::array<t460, (c21)*(c20)>, uint32_t> flattenSafe(juniper::records::recordt_0<juniper::array<juniper::records::recordt_0<juniper::array<t460, c20>, uint32_t>, c21>, uint32_t> listOfLists);
+    template<typename t474, typename t475, int c20>
+    Prelude::maybe<t474> tryReduce(juniper::function<t475, t474(t474, t474)> f, juniper::records::recordt_0<juniper::array<t474, c20>, uint32_t> lst);
+}
+
+namespace List {
+    template<typename t518, typename t522, int c22>
+    t522 reduceBack(juniper::function<t518, t522(t522, t522)> f, juniper::records::recordt_0<juniper::array<t522, c22>, uint32_t> lst);
+}
+
+namespace List {
+    template<typename t534, typename t535, int c25>
+    Prelude::maybe<t534> tryReduceBack(juniper::function<t535, t534(t534, t534)> f, juniper::records::recordt_0<juniper::array<t534, c25>, uint32_t> lst);
+}
+
+namespace List {
+    template<typename t590, int c27, int c28, int c29>
+    juniper::records::recordt_0<juniper::array<t590, c29>, uint32_t> concat(juniper::records::recordt_0<juniper::array<t590, c27>, uint32_t> lstA, juniper::records::recordt_0<juniper::array<t590, c28>, uint32_t> lstB);
+}
+
+namespace List {
+    template<typename t595, int c35, int c36>
+    juniper::records::recordt_0<juniper::array<t595, (((c35)*(-1))+((c36)*(-1)))*(-1)>, uint32_t> concatSafe(juniper::records::recordt_0<juniper::array<t595, c35>, uint32_t> lstA, juniper::records::recordt_0<juniper::array<t595, c36>, uint32_t> lstB);
+}
+
+namespace List {
+    template<typename t603, typename t605, int c40>
+    t605 get(t603 i, juniper::records::recordt_0<juniper::array<t605, c40>, uint32_t> lst);
+}
+
+namespace List {
+    template<typename t608, typename t616, int c42>
+    Prelude::maybe<t616> tryGet(t608 i, juniper::records::recordt_0<juniper::array<t616, c42>, uint32_t> lst);
+}
+
+namespace List {
+    template<typename t649, int c44, int c45, int c46>
+    juniper::records::recordt_0<juniper::array<t649, c46>, uint32_t> flatten(juniper::records::recordt_0<juniper::array<juniper::records::recordt_0<juniper::array<t649, c44>, uint32_t>, c45>, uint32_t> listOfLists);
+}
+
+namespace List {
+    template<typename t653, int c52, int c53>
+    juniper::records::recordt_0<juniper::array<t653, (c53)*(c52)>, uint32_t> flattenSafe(juniper::records::recordt_0<juniper::array<juniper::records::recordt_0<juniper::array<t653, c52>, uint32_t>, c53>, uint32_t> listOfLists);
 }
 
 namespace Math {
-    template<typename t464>
-    t464 min_(t464 x, t464 y);
+    template<typename t659>
+    t659 min_(t659 x, t659 y);
 }
 
 namespace List {
-    template<typename t478, int c26, int c27>
-    juniper::records::recordt_0<juniper::array<t478, c26>, uint32_t> resize(juniper::records::recordt_0<juniper::array<t478, c27>, uint32_t> lst);
+    template<typename t676, int c57, int c58>
+    juniper::records::recordt_0<juniper::array<t676, c57>, uint32_t> resize(juniper::records::recordt_0<juniper::array<t676, c58>, uint32_t> lst);
 }
 
 namespace List {
-    template<typename t484, typename t487, int c30>
-    bool all(juniper::function<t484, bool(t487)> pred, juniper::records::recordt_0<juniper::array<t487, c30>, uint32_t> lst);
+    template<typename t682, typename t685, int c62>
+    bool all(juniper::function<t682, bool(t685)> pred, juniper::records::recordt_0<juniper::array<t685, c62>, uint32_t> lst);
 }
 
 namespace List {
-    template<typename t494, typename t497, int c32>
-    bool any(juniper::function<t494, bool(t497)> pred, juniper::records::recordt_0<juniper::array<t497, c32>, uint32_t> lst);
+    template<typename t692, typename t695, int c64>
+    bool any(juniper::function<t692, bool(t695)> pred, juniper::records::recordt_0<juniper::array<t695, c64>, uint32_t> lst);
 }
 
 namespace List {
-    template<typename t502, int c34>
-    juniper::records::recordt_0<juniper::array<t502, c34>, uint32_t> pushBack(t502 elem, juniper::records::recordt_0<juniper::array<t502, c34>, uint32_t> lst);
+    template<typename t700, int c66>
+    juniper::unit append(t700 elem, juniper::records::recordt_0<juniper::array<t700, c66>, uint32_t>& lst);
 }
 
 namespace List {
-    template<typename t517, int c36>
-    juniper::records::recordt_0<juniper::array<t517, c36>, uint32_t> pushOffFront(t517 elem, juniper::records::recordt_0<juniper::array<t517, c36>, uint32_t> lst);
+    template<typename t708, int c68>
+    juniper::records::recordt_0<juniper::array<t708, c68>, uint32_t> appendPure(t708 elem, juniper::records::recordt_0<juniper::array<t708, c68>, uint32_t> lst);
 }
 
 namespace List {
-    template<typename t532, int c40>
-    juniper::records::recordt_0<juniper::array<t532, c40>, uint32_t> setNth(uint32_t index, t532 elem, juniper::records::recordt_0<juniper::array<t532, c40>, uint32_t> lst);
+    template<typename t716, int c70>
+    juniper::records::recordt_0<juniper::array<t716, ((-1)+((c70)*(-1)))*(-1)>, uint32_t> appendSafe(t716 elem, juniper::records::recordt_0<juniper::array<t716, c70>, uint32_t> lst);
 }
 
 namespace List {
-    template<typename t537, int c42>
-    juniper::records::recordt_0<juniper::array<t537, c42>, uint32_t> replicate(uint32_t numOfElements, t537 elem);
+    template<typename t731, int c74>
+    juniper::unit prepend(t731 elem, juniper::records::recordt_0<juniper::array<t731, c74>, uint32_t>& lst);
 }
 
 namespace List {
-    template<typename t548, int c43>
-    juniper::records::recordt_0<juniper::array<t548, c43>, uint32_t> remove(t548 elem, juniper::records::recordt_0<juniper::array<t548, c43>, uint32_t> lst);
+    template<typename t748, int c78>
+    juniper::records::recordt_0<juniper::array<t748, c78>, uint32_t> prependPure(t748 elem, juniper::records::recordt_0<juniper::array<t748, c78>, uint32_t> lst);
 }
 
 namespace List {
-    template<typename t556, int c48>
-    juniper::records::recordt_0<juniper::array<t556, c48>, uint32_t> dropLast(juniper::records::recordt_0<juniper::array<t556, c48>, uint32_t> lst);
+    template<typename t763, int c82>
+    juniper::unit set(uint32_t index, t763 elem, juniper::records::recordt_0<juniper::array<t763, c82>, uint32_t>& lst);
 }
 
 namespace List {
-    template<typename t566, typename t569, int c50>
-    juniper::unit foreach(juniper::function<t566, juniper::unit(t569)> f, juniper::records::recordt_0<juniper::array<t569, c50>, uint32_t> lst);
+    template<typename t768, int c84>
+    juniper::records::recordt_0<juniper::array<t768, c84>, uint32_t> setPure(uint32_t index, t768 elem, juniper::records::recordt_0<juniper::array<t768, c84>, uint32_t> lst);
 }
 
 namespace List {
-    template<typename t584, int c52>
-    Prelude::maybe<t584> last(juniper::records::recordt_0<juniper::array<t584, c52>, uint32_t> lst);
+    template<typename t774, int c86>
+    juniper::records::recordt_0<juniper::array<t774, c86>, uint32_t> replicate(uint32_t numOfElements, t774 elem);
 }
 
 namespace List {
-    template<typename t598, int c54>
-    Prelude::maybe<t598> max_(juniper::records::recordt_0<juniper::array<t598, c54>, uint32_t> lst);
+    template<typename t795, int c89>
+    juniper::unit remove(t795 elem, juniper::records::recordt_0<juniper::array<t795, c89>, uint32_t>& lst);
 }
 
 namespace List {
-    template<typename t615, int c58>
-    Prelude::maybe<t615> min_(juniper::records::recordt_0<juniper::array<t615, c58>, uint32_t> lst);
+    template<typename t802, int c94>
+    juniper::records::recordt_0<juniper::array<t802, c94>, uint32_t> removePure(t802 elem, juniper::records::recordt_0<juniper::array<t802, c94>, uint32_t> lst);
 }
 
 namespace List {
-    template<typename t623, int c62>
-    bool member(t623 elem, juniper::records::recordt_0<juniper::array<t623, c62>, uint32_t> lst);
+    template<typename t814, int c96>
+    juniper::unit pop(juniper::records::recordt_0<juniper::array<t814, c96>, uint32_t>& lst);
 }
 
 namespace List {
-    template<typename t638, typename t640, int c64>
-    juniper::records::recordt_0<juniper::array<juniper::tuple2<t638, t640>, c64>, uint32_t> zip(juniper::records::recordt_0<juniper::array<t638, c64>, uint32_t> lstA, juniper::records::recordt_0<juniper::array<t640, c64>, uint32_t> lstB);
+    template<typename t821, int c98>
+    juniper::records::recordt_0<juniper::array<t821, c98>, uint32_t> popPure(juniper::records::recordt_0<juniper::array<t821, c98>, uint32_t> lst);
 }
 
 namespace List {
-    template<typename t651, typename t652, int c68>
-    juniper::tuple2<juniper::records::recordt_0<juniper::array<t651, c68>, uint32_t>, juniper::records::recordt_0<juniper::array<t652, c68>, uint32_t>> unzip(juniper::records::recordt_0<juniper::array<juniper::tuple2<t651, t652>, c68>, uint32_t> lst);
+    template<typename t829, typename t832, int c100>
+    juniper::unit iter(juniper::function<t829, juniper::unit(t832)> f, juniper::records::recordt_0<juniper::array<t832, c100>, uint32_t> lst);
 }
 
 namespace List {
-    template<typename t660, int c72>
-    t660 sum(juniper::records::recordt_0<juniper::array<t660, c72>, uint32_t> lst);
+    template<typename t841, int c102>
+    t841 last(juniper::records::recordt_0<juniper::array<t841, c102>, uint32_t> lst);
 }
 
 namespace List {
-    template<typename t678, int c74>
-    t678 average(juniper::records::recordt_0<juniper::array<t678, c74>, uint32_t> lst);
+    template<typename t853, int c104>
+    Prelude::maybe<t853> tryLast(juniper::records::recordt_0<juniper::array<t853, c104>, uint32_t> lst);
 }
 
 namespace List {
-    template<typename t684, typename t685, typename t686, int c76>
-    juniper::records::recordt_0<juniper::array<t686, c76>, uint32_t> sort(juniper::records::recordt_0<juniper::array<t686, c76>, uint32_t> lst, juniper::function<t684, t685(t686)> key);
+    template<typename t889, int c106>
+    Prelude::maybe<t889> tryMax(juniper::records::recordt_0<juniper::array<t889, c106>, uint32_t> lst);
+}
+
+namespace List {
+    template<typename t928, int c110>
+    Prelude::maybe<t928> tryMin(juniper::records::recordt_0<juniper::array<t928, c110>, uint32_t> lst);
+}
+
+namespace List {
+    template<typename t958, int c114>
+    bool member(t958 elem, juniper::records::recordt_0<juniper::array<t958, c114>, uint32_t> lst);
+}
+
+namespace List {
+    template<typename t976, typename t978, int c116>
+    juniper::records::recordt_0<juniper::array<juniper::tuple2<t976, t978>, c116>, uint32_t> zip(juniper::records::recordt_0<juniper::array<t976, c116>, uint32_t> lstA, juniper::records::recordt_0<juniper::array<t978, c116>, uint32_t> lstB);
+}
+
+namespace List {
+    template<typename t995, typename t996, int c121>
+    juniper::tuple2<juniper::records::recordt_0<juniper::array<t995, c121>, uint32_t>, juniper::records::recordt_0<juniper::array<t996, c121>, uint32_t>> unzip(juniper::records::recordt_0<juniper::array<juniper::tuple2<t995, t996>, c121>, uint32_t> lst);
+}
+
+namespace List {
+    template<typename t1004, int c127>
+    t1004 sum(juniper::records::recordt_0<juniper::array<t1004, c127>, uint32_t> lst);
+}
+
+namespace List {
+    template<typename t1022, int c129>
+    t1022 average(juniper::records::recordt_0<juniper::array<t1022, c129>, uint32_t> lst);
+}
+
+namespace List {
+    uint32_t iLeftChild(uint32_t i);
+}
+
+namespace List {
+    uint32_t iRightChild(uint32_t i);
+}
+
+namespace List {
+    uint32_t iParent(uint32_t i);
+}
+
+namespace List {
+    template<typename t1047, typename t1049, typename t1051, typename t1082, int c131>
+    juniper::unit siftDown(juniper::records::recordt_0<juniper::array<t1082, c131>, uint32_t>& lst, juniper::function<t1051, t1047(t1082)> key, uint32_t root, t1049 end);
+}
+
+namespace List {
+    template<typename t1093, typename t1102, typename t1104, int c140>
+    juniper::unit heapify(juniper::records::recordt_0<juniper::array<t1093, c140>, uint32_t>& lst, juniper::function<t1104, t1102(t1093)> key);
+}
+
+namespace List {
+    template<typename t1115, typename t1117, typename t1130, int c142>
+    juniper::unit sort(juniper::function<t1117, t1115(t1130)> key, juniper::records::recordt_0<juniper::array<t1130, c142>, uint32_t>& lst);
+}
+
+namespace List {
+    template<typename t1148, typename t1149, typename t1150, int c149>
+    juniper::records::recordt_0<juniper::array<t1149, c149>, uint32_t> sorted(juniper::function<t1150, t1148(t1149)> key, juniper::records::recordt_0<juniper::array<t1149, c149>, uint32_t> lst);
 }
 
 namespace Signal {
-    template<typename t690, typename t692, typename t707>
-    Prelude::sig<t707> map(juniper::function<t692, t707(t690)> f, Prelude::sig<t690> s);
+    template<typename t1160, typename t1162, typename t1177>
+    Prelude::sig<t1177> map(juniper::function<t1162, t1177(t1160)> f, Prelude::sig<t1160> s);
 }
 
 namespace Signal {
-    template<typename t715, typename t716>
-    juniper::unit sink(juniper::function<t716, juniper::unit(t715)> f, Prelude::sig<t715> s);
+    template<typename t1246, typename t1247>
+    juniper::unit sink(juniper::function<t1247, juniper::unit(t1246)> f, Prelude::sig<t1246> s);
 }
 
 namespace Signal {
-    template<typename t725, typename t739>
-    Prelude::sig<t739> filter(juniper::function<t725, bool(t739)> f, Prelude::sig<t739> s);
+    template<typename t1270, typename t1284>
+    Prelude::sig<t1284> filter(juniper::function<t1270, bool(t1284)> f, Prelude::sig<t1284> s);
 }
 
 namespace Signal {
-    template<typename t746>
-    Prelude::sig<t746> merge(Prelude::sig<t746> sigA, Prelude::sig<t746> sigB);
+    template<typename t1364>
+    Prelude::sig<t1364> merge(Prelude::sig<t1364> sigA, Prelude::sig<t1364> sigB);
 }
 
 namespace Signal {
-    template<typename t750, int c77>
-    Prelude::sig<t750> mergeMany(juniper::records::recordt_0<juniper::array<Prelude::sig<t750>, c77>, uint32_t> sigs);
+    template<typename t1400, int c151>
+    Prelude::sig<t1400> mergeMany(juniper::records::recordt_0<juniper::array<Prelude::sig<t1400>, c151>, uint32_t> sigs);
 }
 
 namespace Signal {
-    template<typename t773, typename t797>
-    Prelude::sig<Prelude::either<t797, t773>> join(Prelude::sig<t797> sigA, Prelude::sig<t773> sigB);
+    template<typename t1518, typename t1542>
+    Prelude::sig<Prelude::either<t1542, t1518>> join(Prelude::sig<t1542> sigA, Prelude::sig<t1518> sigB);
 }
 
 namespace Signal {
-    template<typename t820>
-    Prelude::sig<juniper::unit> toUnit(Prelude::sig<t820> s);
+    template<typename t1831>
+    Prelude::sig<juniper::unit> toUnit(Prelude::sig<t1831> s);
 }
 
 namespace Signal {
-    template<typename t827, typename t829, typename t847>
-    Prelude::sig<t847> foldP(juniper::function<t829, t847(t827, t847)> f, juniper::shared_ptr<t847> state0, Prelude::sig<t827> incoming);
+    template<typename t1865, typename t1867, typename t1883>
+    Prelude::sig<t1883> foldP(juniper::function<t1867, t1883(t1865, t1883)> f, t1883& state0, Prelude::sig<t1865> incoming);
 }
 
 namespace Signal {
-    template<typename t857>
-    Prelude::sig<t857> dropRepeats(juniper::shared_ptr<Prelude::maybe<t857>> maybePrevValue, Prelude::sig<t857> incoming);
+    template<typename t1960>
+    Prelude::sig<t1960> dropRepeats(Prelude::maybe<t1960>& maybePrevValue, Prelude::sig<t1960> incoming);
 }
 
 namespace Signal {
-    template<typename t875>
-    Prelude::sig<t875> latch(juniper::shared_ptr<t875> prevValue, Prelude::sig<t875> incoming);
+    template<typename t2059>
+    Prelude::sig<t2059> latch(t2059& prevValue, Prelude::sig<t2059> incoming);
 }
 
 namespace Signal {
-    template<typename t888, typename t889, typename t892, typename t901>
-    Prelude::sig<t888> map2(juniper::function<t889, t888(t892, t901)> f, juniper::shared_ptr<juniper::tuple2<t892, t901>> state, Prelude::sig<t892> incomingA, Prelude::sig<t901> incomingB);
+    template<typename t2119, typename t2120, typename t2123, typename t2131>
+    Prelude::sig<t2119> map2(juniper::function<t2120, t2119(t2123, t2131)> f, juniper::tuple2<t2123, t2131>& state, Prelude::sig<t2123> incomingA, Prelude::sig<t2131> incomingB);
 }
 
 namespace Signal {
-    template<typename t933, int c79>
-    Prelude::sig<juniper::records::recordt_0<juniper::array<t933, c79>, uint32_t>> record(juniper::shared_ptr<juniper::records::recordt_0<juniper::array<t933, c79>, uint32_t>> pastValues, Prelude::sig<t933> incoming);
+    template<typename t2273, int c153>
+    Prelude::sig<juniper::records::recordt_0<juniper::array<t2273, c153>, uint32_t>> record(juniper::records::recordt_0<juniper::array<t2273, c153>, uint32_t>& pastValues, Prelude::sig<t2273> incoming);
 }
 
 namespace Signal {
-    template<typename t944>
-    Prelude::sig<t944> constant(t944 val);
+    template<typename t2311>
+    Prelude::sig<t2311> constant(t2311 val);
 }
 
 namespace Signal {
-    template<typename t954>
-    Prelude::sig<Prelude::maybe<t954>> meta(Prelude::sig<t954> sigA);
+    template<typename t2346>
+    Prelude::sig<Prelude::maybe<t2346>> meta(Prelude::sig<t2346> sigA);
 }
 
 namespace Signal {
-    template<typename t971>
-    Prelude::sig<t971> unmeta(Prelude::sig<Prelude::maybe<t971>> sigA);
+    template<typename t2413>
+    Prelude::sig<t2413> unmeta(Prelude::sig<Prelude::maybe<t2413>> sigA);
 }
 
 namespace Signal {
-    template<typename t984, typename t985>
-    Prelude::sig<juniper::tuple2<t984, t985>> zip(juniper::shared_ptr<juniper::tuple2<t984, t985>> state, Prelude::sig<t984> sigA, Prelude::sig<t985> sigB);
+    template<typename t2489, typename t2490>
+    Prelude::sig<juniper::tuple2<t2489, t2490>> zip(juniper::tuple2<t2489, t2490>& state, Prelude::sig<t2489> sigA, Prelude::sig<t2490> sigB);
 }
 
 namespace Signal {
-    template<typename t1016, typename t1023>
-    juniper::tuple2<Prelude::sig<t1016>, Prelude::sig<t1023>> unzip(Prelude::sig<juniper::tuple2<t1016, t1023>> incoming);
+    template<typename t2560, typename t2567>
+    juniper::tuple2<Prelude::sig<t2560>, Prelude::sig<t2567>> unzip(Prelude::sig<juniper::tuple2<t2560, t2567>> incoming);
 }
 
 namespace Signal {
-    template<typename t1030, typename t1031>
-    Prelude::sig<t1030> toggle(t1030 val1, t1030 val2, juniper::shared_ptr<t1030> state, Prelude::sig<t1031> incoming);
+    template<typename t2694, typename t2695>
+    Prelude::sig<t2694> toggle(t2694 val1, t2694 val2, t2694& state, Prelude::sig<t2695> incoming);
 }
 
 namespace Io {
@@ -2597,8 +2731,8 @@ namespace Io {
 }
 
 namespace Io {
-    template<int c81>
-    juniper::unit printCharList(juniper::records::recordt_0<juniper::array<uint8_t, c81>, uint32_t> cl);
+    template<int c155>
+    juniper::unit printCharList(juniper::records::recordt_0<juniper::array<uint8_t, c155>, uint32_t> cl);
 }
 
 namespace Io {
@@ -2610,8 +2744,8 @@ namespace Io {
 }
 
 namespace Io {
-    template<typename t1059>
-    t1059 baseToInt(Io::base b);
+    template<typename t2750>
+    t2750 baseToInt(Io::base b);
 }
 
 namespace Io {
@@ -2679,55 +2813,50 @@ namespace Io {
 }
 
 namespace Io {
-    Prelude::sig<juniper::unit> risingEdge(Prelude::sig<Io::pinState> sig, juniper::shared_ptr<Io::pinState> prevState);
+    Prelude::sig<juniper::unit> risingEdge(Prelude::sig<Io::pinState> sig, Io::pinState& prevState);
 }
 
 namespace Io {
-    Prelude::sig<juniper::unit> fallingEdge(Prelude::sig<Io::pinState> sig, juniper::shared_ptr<Io::pinState> prevState);
+    Prelude::sig<juniper::unit> fallingEdge(Prelude::sig<Io::pinState> sig, Io::pinState& prevState);
 }
 
 namespace Io {
-    Prelude::sig<Io::pinState> edge(Prelude::sig<Io::pinState> sig, juniper::shared_ptr<Io::pinState> prevState);
+    Prelude::sig<juniper::unit> edge(Prelude::sig<Io::pinState> sig, Io::pinState& prevState);
 }
 
 namespace Maybe {
-    template<typename t1191, typename t1193, typename t1202>
-    Prelude::maybe<t1202> map(juniper::function<t1193, t1202(t1191)> f, Prelude::maybe<t1191> maybeVal);
+    template<typename t3204, typename t3206, typename t3215>
+    Prelude::maybe<t3215> map(juniper::function<t3206, t3215(t3204)> f, Prelude::maybe<t3204> maybeVal);
 }
 
 namespace Maybe {
-    template<typename t1206>
-    t1206 get(Prelude::maybe<t1206> maybeVal);
+    template<typename t3245>
+    t3245 get(Prelude::maybe<t3245> maybeVal);
 }
 
 namespace Maybe {
-    template<typename t1209>
-    bool isJust(Prelude::maybe<t1209> maybeVal);
+    template<typename t3254>
+    bool isJust(Prelude::maybe<t3254> maybeVal);
 }
 
 namespace Maybe {
-    template<typename t1212>
-    bool isNothing(Prelude::maybe<t1212> maybeVal);
+    template<typename t3265>
+    bool isNothing(Prelude::maybe<t3265> maybeVal);
 }
 
 namespace Maybe {
-    template<typename t1218>
-    uint8_t count(Prelude::maybe<t1218> maybeVal);
+    template<typename t3279>
+    uint8_t count(Prelude::maybe<t3279> maybeVal);
 }
 
 namespace Maybe {
-    template<typename t1224, typename t1225, typename t1226>
-    t1224 foldl(juniper::function<t1226, t1224(t1225, t1224)> f, t1224 initState, Prelude::maybe<t1225> maybeVal);
+    template<typename t3293, typename t3294, typename t3295>
+    t3293 fold(juniper::function<t3295, t3293(t3294, t3293)> f, t3293 initState, Prelude::maybe<t3294> maybeVal);
 }
 
 namespace Maybe {
-    template<typename t1234, typename t1235, typename t1236>
-    t1234 fodlr(juniper::function<t1236, t1234(t1235, t1234)> f, t1234 initState, Prelude::maybe<t1235> maybeVal);
-}
-
-namespace Maybe {
-    template<typename t1247, typename t1248>
-    juniper::unit iter(juniper::function<t1248, juniper::unit(t1247)> f, Prelude::maybe<t1247> maybeVal);
+    template<typename t3311, typename t3312>
+    juniper::unit iter(juniper::function<t3312, juniper::unit(t3311)> f, Prelude::maybe<t3311> maybeVal);
 }
 
 namespace Time {
@@ -2739,11 +2868,7 @@ namespace Time {
 }
 
 namespace Time {
-    juniper::shared_ptr<juniper::records::recordt_1<uint32_t>> state();
-}
-
-namespace Time {
-    Prelude::sig<uint32_t> every(uint32_t interval, juniper::shared_ptr<juniper::records::recordt_1<uint32_t>> state);
+    Prelude::sig<uint32_t> every(uint32_t interval, juniper::records::recordt_1<uint32_t>& state);
 }
 
 namespace Math {
@@ -2835,6 +2960,11 @@ namespace Math {
 }
 
 namespace Math {
+    template<typename t3456>
+    t3456 abs_(t3456 x);
+}
+
+namespace Math {
     double floor_(double x);
 }
 
@@ -2847,129 +2977,126 @@ namespace Math {
 }
 
 namespace Math {
-    template<typename t1315>
-    t1315 max_(t1315 x, t1315 y);
+    template<typename t3467>
+    t3467 max_(t3467 x, t3467 y);
 }
 
 namespace Math {
-    double mapRange(double x, double a1, double a2, double b1, double b2);
+    template<typename t3469>
+    t3469 mapRange(t3469 x, t3469 a1, t3469 a2, t3469 b1, t3469 b2);
 }
 
 namespace Math {
-    template<typename t1318>
-    t1318 clamp(t1318 x, t1318 min, t1318 max);
+    template<typename t3471>
+    t3471 clamp(t3471 x, t3471 min, t3471 max);
 }
 
 namespace Math {
-    template<typename t1323>
-    int8_t sign(t1323 n);
+    template<typename t3476>
+    int8_t sign(t3476 n);
 }
 
 namespace Button {
-    juniper::shared_ptr<juniper::records::recordt_2<Io::pinState, uint32_t, Io::pinState>> state();
+    Prelude::sig<Io::pinState> debounceDelay(Prelude::sig<Io::pinState> incoming, uint16_t delay, juniper::records::recordt_2<Io::pinState, uint32_t, Io::pinState>& buttonState);
 }
 
 namespace Button {
-    Prelude::sig<Io::pinState> debounceDelay(Prelude::sig<Io::pinState> incoming, uint16_t delay, juniper::shared_ptr<juniper::records::recordt_2<Io::pinState, uint32_t, Io::pinState>> buttonState);
-}
-
-namespace Button {
-    Prelude::sig<Io::pinState> debounce(Prelude::sig<Io::pinState> incoming, juniper::shared_ptr<juniper::records::recordt_2<Io::pinState, uint32_t, Io::pinState>> buttonState);
+    Prelude::sig<Io::pinState> debounce(Prelude::sig<Io::pinState> incoming, juniper::records::recordt_2<Io::pinState, uint32_t, Io::pinState>& buttonState);
 }
 
 namespace Vector {
-    template<typename t1371, int c82>
-    juniper::array<t1371, c82> add(juniper::array<t1371, c82> v1, juniper::array<t1371, c82> v2);
+    template<typename t3596, int c156>
+    juniper::array<t3596, c156> add(juniper::array<t3596, c156> v1, juniper::array<t3596, c156> v2);
 }
 
 namespace Vector {
-    template<typename t1373, int c85>
-    juniper::array<t1373, c85> zero();
+    template<typename t3600, int c159>
+    juniper::array<t3600, c159> zero();
 }
 
 namespace Vector {
-    template<typename t1379, int c86>
-    juniper::array<t1379, c86> subtract(juniper::array<t1379, c86> v1, juniper::array<t1379, c86> v2);
+    template<typename t3608, int c161>
+    juniper::array<t3608, c161> subtract(juniper::array<t3608, c161> v1, juniper::array<t3608, c161> v2);
 }
 
 namespace Vector {
-    template<typename t1383, int c89>
-    juniper::array<t1383, c89> scale(t1383 scalar, juniper::array<t1383, c89> v);
+    template<typename t3612, int c164>
+    juniper::array<t3612, c164> scale(t3612 scalar, juniper::array<t3612, c164> v);
 }
 
 namespace Vector {
-    template<typename t1389, int c91>
-    t1389 dot(juniper::array<t1389, c91> v1, juniper::array<t1389, c91> v2);
+    template<typename t3618, int c166>
+    t3618 dot(juniper::array<t3618, c166> v1, juniper::array<t3618, c166> v2);
 }
 
 namespace Vector {
-    template<typename t1395, int c94>
-    t1395 magnitude2(juniper::array<t1395, c94> v);
+    template<typename t3624, int c169>
+    t3624 magnitude2(juniper::array<t3624, c169> v);
 }
 
 namespace Vector {
-    template<typename t1397, int c97>
-    double magnitude(juniper::array<t1397, c97> v);
+    template<typename t3626, int c172>
+    double magnitude(juniper::array<t3626, c172> v);
 }
 
 namespace Vector {
-    template<typename t1413, int c99>
-    juniper::array<t1413, c99> multiply(juniper::array<t1413, c99> u, juniper::array<t1413, c99> v);
+    template<typename t3642, int c174>
+    juniper::array<t3642, c174> multiply(juniper::array<t3642, c174> u, juniper::array<t3642, c174> v);
 }
 
 namespace Vector {
-    template<typename t1422, int c102>
-    juniper::array<t1422, c102> normalize(juniper::array<t1422, c102> v);
+    template<typename t3651, int c177>
+    juniper::array<t3651, c177> normalize(juniper::array<t3651, c177> v);
 }
 
 namespace Vector {
-    template<typename t1433, int c106>
-    double angle(juniper::array<t1433, c106> v1, juniper::array<t1433, c106> v2);
+    template<typename t3662, int c181>
+    double angle(juniper::array<t3662, c181> v1, juniper::array<t3662, c181> v2);
 }
 
 namespace Vector {
-    template<typename t1475>
-    juniper::array<t1475, 3> cross(juniper::array<t1475, 3> u, juniper::array<t1475, 3> v);
+    template<typename t3704>
+    juniper::array<t3704, 3> cross(juniper::array<t3704, 3> u, juniper::array<t3704, 3> v);
 }
 
 namespace Vector {
-    template<typename t1477, int c122>
-    juniper::array<t1477, c122> project(juniper::array<t1477, c122> a, juniper::array<t1477, c122> b);
+    template<typename t3706, int c197>
+    juniper::array<t3706, c197> project(juniper::array<t3706, c197> a, juniper::array<t3706, c197> b);
 }
 
 namespace Vector {
-    template<typename t1493, int c126>
-    juniper::array<t1493, c126> projectPlane(juniper::array<t1493, c126> a, juniper::array<t1493, c126> m);
+    template<typename t3722, int c201>
+    juniper::array<t3722, c201> projectPlane(juniper::array<t3722, c201> a, juniper::array<t3722, c201> m);
 }
 
 namespace CharList {
-    template<int c129>
-    juniper::records::recordt_0<juniper::array<uint8_t, c129>, uint32_t> toUpper(juniper::records::recordt_0<juniper::array<uint8_t, c129>, uint32_t> str);
+    template<int c204>
+    juniper::records::recordt_0<juniper::array<uint8_t, c204>, uint32_t> toUpper(juniper::records::recordt_0<juniper::array<uint8_t, c204>, uint32_t> str);
 }
 
 namespace CharList {
-    template<int c130>
-    juniper::records::recordt_0<juniper::array<uint8_t, c130>, uint32_t> toLower(juniper::records::recordt_0<juniper::array<uint8_t, c130>, uint32_t> str);
+    template<int c205>
+    juniper::records::recordt_0<juniper::array<uint8_t, c205>, uint32_t> toLower(juniper::records::recordt_0<juniper::array<uint8_t, c205>, uint32_t> str);
 }
 
 namespace CharList {
-    template<int c131>
-    juniper::records::recordt_0<juniper::array<uint8_t, (1)+(c131)>, uint32_t> i32ToCharList(int32_t m);
+    template<int c206>
+    juniper::records::recordt_0<juniper::array<uint8_t, ((-1)+((c206)*(-1)))*(-1)>, uint32_t> i32ToCharList(int32_t m);
 }
 
 namespace CharList {
-    template<int c132>
-    uint32_t length(juniper::records::recordt_0<juniper::array<uint8_t, c132>, uint32_t> s);
+    template<int c208>
+    uint32_t length(juniper::records::recordt_0<juniper::array<uint8_t, c208>, uint32_t> s);
 }
 
 namespace CharList {
-    template<int c133, int c134, int c135>
-    juniper::records::recordt_0<juniper::array<uint8_t, (1)+(c135)>, uint32_t> concat(juniper::records::recordt_0<juniper::array<uint8_t, (1)+(c133)>, uint32_t> sA, juniper::records::recordt_0<juniper::array<uint8_t, (1)+(c134)>, uint32_t> sB);
+    template<int c209, int c210, int c211>
+    juniper::records::recordt_0<juniper::array<uint8_t, ((-1)+((c211)*(-1)))*(-1)>, uint32_t> concat(juniper::records::recordt_0<juniper::array<uint8_t, (1)+(c209)>, uint32_t> sA, juniper::records::recordt_0<juniper::array<uint8_t, (1)+(c210)>, uint32_t> sB);
 }
 
 namespace CharList {
-    template<int c142, int c143>
-    juniper::records::recordt_0<juniper::array<uint8_t, (((-1)+((c142)*(-1)))+((c143)*(-1)))*(-1)>, uint32_t> safeConcat(juniper::records::recordt_0<juniper::array<uint8_t, (1)+(c142)>, uint32_t> sA, juniper::records::recordt_0<juniper::array<uint8_t, (1)+(c143)>, uint32_t> sB);
+    template<int c219, int c220>
+    juniper::records::recordt_0<juniper::array<uint8_t, (((-1)+((c219)*(-1)))+((c220)*(-1)))*(-1)>, uint32_t> safeConcat(juniper::records::recordt_0<juniper::array<uint8_t, (1)+(c219)>, uint32_t> sA, juniper::records::recordt_0<juniper::array<uint8_t, (1)+(c220)>, uint32_t> sB);
 }
 
 namespace Random {
@@ -2981,8 +3108,13 @@ namespace Random {
 }
 
 namespace Random {
-    template<typename t1563, int c147>
-    t1563 choice(juniper::records::recordt_0<juniper::array<t1563, c147>, uint32_t> lst);
+    template<typename t3800, int c224>
+    t3800 choice(juniper::records::recordt_0<juniper::array<t3800, c224>, uint32_t> lst);
+}
+
+namespace Random {
+    template<typename t3820, int c226>
+    Prelude::maybe<t3820> tryChoice(juniper::records::recordt_0<juniper::array<t3820, c226>, uint32_t> lst);
 }
 
 namespace Color {
@@ -3030,8 +3162,8 @@ namespace Ble {
 }
 
 namespace Ble {
-    template<int c149>
-    uint16_t writeCharactersticBytes(Ble::characterstict c, juniper::records::recordt_0<juniper::array<uint8_t, c149>, uint32_t> bytes);
+    template<int c228>
+    uint16_t writeCharactersticBytes(Ble::characterstict c, juniper::records::recordt_0<juniper::array<uint8_t, c228>, uint32_t> bytes);
 }
 
 namespace Ble {
@@ -3051,13 +3183,13 @@ namespace Ble {
 }
 
 namespace Ble {
-    template<typename t1917>
-    uint16_t writeGeneric(Ble::characterstict c, t1917 x);
+    template<typename t4201>
+    uint16_t writeGeneric(Ble::characterstict c, t4201 x);
 }
 
 namespace Ble {
-    template<typename t1922>
-    t1922 readGeneric(Ble::characterstict c);
+    template<typename t4206>
+    t4206 readGeneric(Ble::characterstict c);
 }
 
 namespace Ble {
@@ -3125,6 +3257,10 @@ namespace Ble {
 }
 
 namespace CWatch {
+    juniper::rcptr test();
+}
+
+namespace CWatch {
     juniper::unit setup();
 }
 
@@ -3169,13 +3305,13 @@ namespace Gfx {
 }
 
 namespace Gfx {
-    template<int c150>
-    juniper::tuple4<int16_t, int16_t, uint16_t, uint16_t> getCharListBounds(int16_t x, int16_t y, juniper::records::recordt_0<juniper::array<uint8_t, (1)+(c150)>, uint32_t> cl);
+    template<int c229>
+    juniper::tuple4<int16_t, int16_t, uint16_t, uint16_t> getCharListBounds(int16_t x, int16_t y, juniper::records::recordt_0<juniper::array<uint8_t, (1)+(c229)>, uint32_t> cl);
 }
 
 namespace Gfx {
-    template<int c151>
-    juniper::unit printCharList(juniper::records::recordt_0<juniper::array<uint8_t, (1)+(c151)>, uint32_t> cl);
+    template<int c230>
+    juniper::unit printCharList(juniper::records::recordt_0<juniper::array<uint8_t, (1)+(c230)>, uint32_t> cl);
 }
 
 namespace Gfx {
@@ -3215,52 +3351,12 @@ namespace Gfx {
 }
 
 namespace Gfx {
-    template<int c176>
-    juniper::unit centerCursor(int16_t x, int16_t y, Gfx::align align, juniper::records::recordt_0<juniper::array<uint8_t, c176>, uint32_t> cl);
+    template<int c255>
+    juniper::unit centerCursor(int16_t x, int16_t y, Gfx::align align, juniper::records::recordt_0<juniper::array<uint8_t, c255>, uint32_t> cl);
 }
 
 namespace Gfx {
     juniper::unit setTextWrap(bool wrap);
-}
-
-namespace List {
-    
-template<typename t, typename clos, typename keyT, int n>
-uint32_t partition(list<t, n>& lst, juniper::function<clos, keyT(t)> keyF, uint32_t lo, uint32_t hi) {
-    keyT pivot = keyF(lst.data[hi]);
-    
-    uint32_t i = lo;
-
-    for (uint32_t j = lo; j < (hi - 1); j++) {
-        if (keyF(lst.data[j]) <= pivot) {
-            t tmp = lst.data[i];
-            lst.data[i] = lst.data[j];
-            lst.data[j] = tmp;
-            i++;
-        }
-    }
-
-    i++;
-
-    t tmp = lst.data[i];
-    lst.data[i] = lst.data[hi];
-    lst.data[hi] = tmp;
-
-    return i;
-}
-
-template <typename t, typename clos, typename keyT, int n>
-void quicksort(list<t, n>& lst, juniper::function<clos, keyT(t)> keyF, uint32_t lo, uint32_t hi) {
-    if (lo >= hi || lo < 0) {
-        return;
-    }
-
-    uint32_t p = partition<t, clos, keyT, n>(lst, keyF, lo, hi);
-
-    quicksort(lst, lo, p-1);
-    quicksort(lst, p+1, hi);
-}
-
 }
 
 namespace Arcada {
@@ -3291,12 +3387,12 @@ void onWriteDayOfWeek(uint16_t conn_hdl, BLECharacteristic* chr, uint8_t* data, 
 }
 
 namespace Prelude {
-    void * extractptr(juniper::smartpointer p) {
+    void * extractptr(juniper::rcptr p) {
         return (([&]() -> void * {
             void * ret;
             
             (([&]() -> juniper::unit {
-                ret = p.get()->get();
+                ret = *p.get();
                 return {};
             })());
             return ret;
@@ -3305,15 +3401,29 @@ namespace Prelude {
 }
 
 namespace Prelude {
-    template<typename t39, typename t40, typename t41, typename t42, typename t44>
-    juniper::function<juniper::closures::closuret_0<juniper::function<t41, t40(t39)>, juniper::function<t42, t39(t44)>>, t40(t44)> compose(juniper::function<t41, t40(t39)> f, juniper::function<t42, t39(t44)> g) {
-        return (([&]() -> juniper::function<juniper::closures::closuret_0<juniper::function<t41, t40(t39)>, juniper::function<t42, t39(t44)>>, t40(t44)> {
-            using a = t44;
-            using b = t39;
-            using c = t40;
-            return juniper::function<juniper::closures::closuret_0<juniper::function<t41, t40(t39)>, juniper::function<t42, t39(t44)>>, t40(t44)>(juniper::closures::closuret_0<juniper::function<t41, t40(t39)>, juniper::function<t42, t39(t44)>>(f, g), [](juniper::closures::closuret_0<juniper::function<t41, t40(t39)>, juniper::function<t42, t39(t44)>>& junclosure, t44 x) -> t40 { 
-                juniper::function<t41, t40(t39)>& f = junclosure.f;
-                juniper::function<t42, t39(t44)>& g = junclosure.g;
+    juniper::rcptr makerc(void * p, juniper::function<void, juniper::unit(void *)> finalizer) {
+        return (([&]() -> juniper::rcptr {
+            juniper::rcptr ret;
+            
+            (([&]() -> juniper::unit {
+                ret = juniper::make_rcptr(p, finalizer);
+                return {};
+            })());
+            return ret;
+        })());
+    }
+}
+
+namespace Prelude {
+    template<typename t48, typename t49, typename t50, typename t51, typename t53>
+    juniper::function<juniper::closures::closuret_0<juniper::function<t51, t49(t48)>, juniper::function<t50, t48(t53)>>, t49(t53)> compose(juniper::function<t51, t49(t48)> f, juniper::function<t50, t48(t53)> g) {
+        return (([&]() -> juniper::function<juniper::closures::closuret_0<juniper::function<t51, t49(t48)>, juniper::function<t50, t48(t53)>>, t49(t53)> {
+            using a = t53;
+            using b = t48;
+            using c = t49;
+            return juniper::function<juniper::closures::closuret_0<juniper::function<t51, t49(t48)>, juniper::function<t50, t48(t53)>>, t49(t53)>(juniper::closures::closuret_0<juniper::function<t51, t49(t48)>, juniper::function<t50, t48(t53)>>(f, g), [](juniper::closures::closuret_0<juniper::function<t51, t49(t48)>, juniper::function<t50, t48(t53)>>& junclosure, t53 x) -> t49 { 
+                juniper::function<t51, t49(t48)>& f = junclosure.f;
+                juniper::function<t50, t48(t53)>& g = junclosure.g;
                 return f(g(x));
              });
         })());
@@ -3321,17 +3431,27 @@ namespace Prelude {
 }
 
 namespace Prelude {
-    template<typename t57, typename t58, typename t61, typename t62>
-    juniper::function<juniper::closures::closuret_1<juniper::function<t58, t57(t61, t62)>>, juniper::function<juniper::closures::closuret_2<juniper::function<t58, t57(t61, t62)>, t61>, t57(t62)>(t61)> curry(juniper::function<t58, t57(t61, t62)> f) {
-        return (([&]() -> juniper::function<juniper::closures::closuret_1<juniper::function<t58, t57(t61, t62)>>, juniper::function<juniper::closures::closuret_2<juniper::function<t58, t57(t61, t62)>, t61>, t57(t62)>(t61)> {
+    template<typename t61>
+    t61 id(t61 x) {
+        return (([&]() -> t61 {
             using a = t61;
-            using b = t62;
-            using c = t57;
-            return juniper::function<juniper::closures::closuret_1<juniper::function<t58, t57(t61, t62)>>, juniper::function<juniper::closures::closuret_2<juniper::function<t58, t57(t61, t62)>, t61>, t57(t62)>(t61)>(juniper::closures::closuret_1<juniper::function<t58, t57(t61, t62)>>(f), [](juniper::closures::closuret_1<juniper::function<t58, t57(t61, t62)>>& junclosure, t61 valueA) -> juniper::function<juniper::closures::closuret_2<juniper::function<t58, t57(t61, t62)>, t61>, t57(t62)> { 
-                juniper::function<t58, t57(t61, t62)>& f = junclosure.f;
-                return juniper::function<juniper::closures::closuret_2<juniper::function<t58, t57(t61, t62)>, t61>, t57(t62)>(juniper::closures::closuret_2<juniper::function<t58, t57(t61, t62)>, t61>(f, valueA), [](juniper::closures::closuret_2<juniper::function<t58, t57(t61, t62)>, t61>& junclosure, t62 valueB) -> t57 { 
-                    juniper::function<t58, t57(t61, t62)>& f = junclosure.f;
-                    t61& valueA = junclosure.valueA;
+            return x;
+        })());
+    }
+}
+
+namespace Prelude {
+    template<typename t68, typename t69, typename t72, typename t73>
+    juniper::function<juniper::closures::closuret_1<juniper::function<t69, t68(t72, t73)>>, juniper::function<juniper::closures::closuret_2<juniper::function<t69, t68(t72, t73)>, t72>, t68(t73)>(t72)> curry(juniper::function<t69, t68(t72, t73)> f) {
+        return (([&]() -> juniper::function<juniper::closures::closuret_1<juniper::function<t69, t68(t72, t73)>>, juniper::function<juniper::closures::closuret_2<juniper::function<t69, t68(t72, t73)>, t72>, t68(t73)>(t72)> {
+            using a = t72;
+            using b = t73;
+            using c = t68;
+            return juniper::function<juniper::closures::closuret_1<juniper::function<t69, t68(t72, t73)>>, juniper::function<juniper::closures::closuret_2<juniper::function<t69, t68(t72, t73)>, t72>, t68(t73)>(t72)>(juniper::closures::closuret_1<juniper::function<t69, t68(t72, t73)>>(f), [](juniper::closures::closuret_1<juniper::function<t69, t68(t72, t73)>>& junclosure, t72 valueA) -> juniper::function<juniper::closures::closuret_2<juniper::function<t69, t68(t72, t73)>, t72>, t68(t73)> { 
+                juniper::function<t69, t68(t72, t73)>& f = junclosure.f;
+                return juniper::function<juniper::closures::closuret_2<juniper::function<t69, t68(t72, t73)>, t72>, t68(t73)>(juniper::closures::closuret_2<juniper::function<t69, t68(t72, t73)>, t72>(f, valueA), [](juniper::closures::closuret_2<juniper::function<t69, t68(t72, t73)>, t72>& junclosure, t73 valueB) -> t68 { 
+                    juniper::function<t69, t68(t72, t73)>& f = junclosure.f;
+                    t72& valueA = junclosure.valueA;
                     return f(valueA, valueB);
                  });
              });
@@ -3340,14 +3460,14 @@ namespace Prelude {
 }
 
 namespace Prelude {
-    template<typename t73, typename t74, typename t75, typename t77, typename t78>
-    juniper::function<juniper::closures::closuret_1<juniper::function<t74, juniper::function<t75, t73(t78)>(t77)>>, t73(t77, t78)> uncurry(juniper::function<t74, juniper::function<t75, t73(t78)>(t77)> f) {
-        return (([&]() -> juniper::function<juniper::closures::closuret_1<juniper::function<t74, juniper::function<t75, t73(t78)>(t77)>>, t73(t77, t78)> {
-            using a = t77;
-            using b = t78;
-            using c = t73;
-            return juniper::function<juniper::closures::closuret_1<juniper::function<t74, juniper::function<t75, t73(t78)>(t77)>>, t73(t77,t78)>(juniper::closures::closuret_1<juniper::function<t74, juniper::function<t75, t73(t78)>(t77)>>(f), [](juniper::closures::closuret_1<juniper::function<t74, juniper::function<t75, t73(t78)>(t77)>>& junclosure, t77 valueA, t78 valueB) -> t73 { 
-                juniper::function<t74, juniper::function<t75, t73(t78)>(t77)>& f = junclosure.f;
+    template<typename t84, typename t85, typename t86, typename t88, typename t89>
+    juniper::function<juniper::closures::closuret_1<juniper::function<t85, juniper::function<t86, t84(t89)>(t88)>>, t84(t88, t89)> uncurry(juniper::function<t85, juniper::function<t86, t84(t89)>(t88)> f) {
+        return (([&]() -> juniper::function<juniper::closures::closuret_1<juniper::function<t85, juniper::function<t86, t84(t89)>(t88)>>, t84(t88, t89)> {
+            using a = t88;
+            using b = t89;
+            using c = t84;
+            return juniper::function<juniper::closures::closuret_1<juniper::function<t85, juniper::function<t86, t84(t89)>(t88)>>, t84(t88,t89)>(juniper::closures::closuret_1<juniper::function<t85, juniper::function<t86, t84(t89)>(t88)>>(f), [](juniper::closures::closuret_1<juniper::function<t85, juniper::function<t86, t84(t89)>(t88)>>& junclosure, t88 valueA, t89 valueB) -> t84 { 
+                juniper::function<t85, juniper::function<t86, t84(t89)>(t88)>& f = junclosure.f;
                 return f(valueA)(valueB);
              });
         })());
@@ -3355,22 +3475,22 @@ namespace Prelude {
 }
 
 namespace Prelude {
-    template<typename t100, typename t93, typename t94, typename t98, typename t99>
-    juniper::function<juniper::closures::closuret_1<juniper::function<t94, t93(t98, t99, t100)>>, juniper::function<juniper::closures::closuret_2<juniper::function<t94, t93(t98, t99, t100)>, t98>, juniper::function<juniper::closures::closuret_3<juniper::function<t94, t93(t98, t99, t100)>, t98, t99>, t93(t100)>(t99)>(t98)> curry3(juniper::function<t94, t93(t98, t99, t100)> f) {
-        return (([&]() -> juniper::function<juniper::closures::closuret_1<juniper::function<t94, t93(t98, t99, t100)>>, juniper::function<juniper::closures::closuret_2<juniper::function<t94, t93(t98, t99, t100)>, t98>, juniper::function<juniper::closures::closuret_3<juniper::function<t94, t93(t98, t99, t100)>, t98, t99>, t93(t100)>(t99)>(t98)> {
-            using a = t98;
-            using b = t99;
-            using c = t100;
-            using d = t93;
-            return juniper::function<juniper::closures::closuret_1<juniper::function<t94, t93(t98, t99, t100)>>, juniper::function<juniper::closures::closuret_2<juniper::function<t94, t93(t98, t99, t100)>, t98>, juniper::function<juniper::closures::closuret_3<juniper::function<t94, t93(t98, t99, t100)>, t98, t99>, t93(t100)>(t99)>(t98)>(juniper::closures::closuret_1<juniper::function<t94, t93(t98, t99, t100)>>(f), [](juniper::closures::closuret_1<juniper::function<t94, t93(t98, t99, t100)>>& junclosure, t98 valueA) -> juniper::function<juniper::closures::closuret_2<juniper::function<t94, t93(t98, t99, t100)>, t98>, juniper::function<juniper::closures::closuret_3<juniper::function<t94, t93(t98, t99, t100)>, t98, t99>, t93(t100)>(t99)> { 
-                juniper::function<t94, t93(t98, t99, t100)>& f = junclosure.f;
-                return juniper::function<juniper::closures::closuret_2<juniper::function<t94, t93(t98, t99, t100)>, t98>, juniper::function<juniper::closures::closuret_3<juniper::function<t94, t93(t98, t99, t100)>, t98, t99>, t93(t100)>(t99)>(juniper::closures::closuret_2<juniper::function<t94, t93(t98, t99, t100)>, t98>(f, valueA), [](juniper::closures::closuret_2<juniper::function<t94, t93(t98, t99, t100)>, t98>& junclosure, t99 valueB) -> juniper::function<juniper::closures::closuret_3<juniper::function<t94, t93(t98, t99, t100)>, t98, t99>, t93(t100)> { 
-                    juniper::function<t94, t93(t98, t99, t100)>& f = junclosure.f;
-                    t98& valueA = junclosure.valueA;
-                    return juniper::function<juniper::closures::closuret_3<juniper::function<t94, t93(t98, t99, t100)>, t98, t99>, t93(t100)>(juniper::closures::closuret_3<juniper::function<t94, t93(t98, t99, t100)>, t98, t99>(f, valueA, valueB), [](juniper::closures::closuret_3<juniper::function<t94, t93(t98, t99, t100)>, t98, t99>& junclosure, t100 valueC) -> t93 { 
-                        juniper::function<t94, t93(t98, t99, t100)>& f = junclosure.f;
-                        t98& valueA = junclosure.valueA;
-                        t99& valueB = junclosure.valueB;
+    template<typename t104, typename t106, typename t109, typename t110, typename t111>
+    juniper::function<juniper::closures::closuret_1<juniper::function<t106, t104(t109, t110, t111)>>, juniper::function<juniper::closures::closuret_2<juniper::function<t106, t104(t109, t110, t111)>, t109>, juniper::function<juniper::closures::closuret_3<juniper::function<t106, t104(t109, t110, t111)>, t109, t110>, t104(t111)>(t110)>(t109)> curry3(juniper::function<t106, t104(t109, t110, t111)> f) {
+        return (([&]() -> juniper::function<juniper::closures::closuret_1<juniper::function<t106, t104(t109, t110, t111)>>, juniper::function<juniper::closures::closuret_2<juniper::function<t106, t104(t109, t110, t111)>, t109>, juniper::function<juniper::closures::closuret_3<juniper::function<t106, t104(t109, t110, t111)>, t109, t110>, t104(t111)>(t110)>(t109)> {
+            using a = t109;
+            using b = t110;
+            using c = t111;
+            using d = t104;
+            return juniper::function<juniper::closures::closuret_1<juniper::function<t106, t104(t109, t110, t111)>>, juniper::function<juniper::closures::closuret_2<juniper::function<t106, t104(t109, t110, t111)>, t109>, juniper::function<juniper::closures::closuret_3<juniper::function<t106, t104(t109, t110, t111)>, t109, t110>, t104(t111)>(t110)>(t109)>(juniper::closures::closuret_1<juniper::function<t106, t104(t109, t110, t111)>>(f), [](juniper::closures::closuret_1<juniper::function<t106, t104(t109, t110, t111)>>& junclosure, t109 valueA) -> juniper::function<juniper::closures::closuret_2<juniper::function<t106, t104(t109, t110, t111)>, t109>, juniper::function<juniper::closures::closuret_3<juniper::function<t106, t104(t109, t110, t111)>, t109, t110>, t104(t111)>(t110)> { 
+                juniper::function<t106, t104(t109, t110, t111)>& f = junclosure.f;
+                return juniper::function<juniper::closures::closuret_2<juniper::function<t106, t104(t109, t110, t111)>, t109>, juniper::function<juniper::closures::closuret_3<juniper::function<t106, t104(t109, t110, t111)>, t109, t110>, t104(t111)>(t110)>(juniper::closures::closuret_2<juniper::function<t106, t104(t109, t110, t111)>, t109>(f, valueA), [](juniper::closures::closuret_2<juniper::function<t106, t104(t109, t110, t111)>, t109>& junclosure, t110 valueB) -> juniper::function<juniper::closures::closuret_3<juniper::function<t106, t104(t109, t110, t111)>, t109, t110>, t104(t111)> { 
+                    juniper::function<t106, t104(t109, t110, t111)>& f = junclosure.f;
+                    t109& valueA = junclosure.valueA;
+                    return juniper::function<juniper::closures::closuret_3<juniper::function<t106, t104(t109, t110, t111)>, t109, t110>, t104(t111)>(juniper::closures::closuret_3<juniper::function<t106, t104(t109, t110, t111)>, t109, t110>(f, valueA, valueB), [](juniper::closures::closuret_3<juniper::function<t106, t104(t109, t110, t111)>, t109, t110>& junclosure, t111 valueC) -> t104 { 
+                        juniper::function<t106, t104(t109, t110, t111)>& f = junclosure.f;
+                        t109& valueA = junclosure.valueA;
+                        t110& valueB = junclosure.valueB;
                         return f(valueA, valueB, valueC);
                      });
                  });
@@ -3380,15 +3500,15 @@ namespace Prelude {
 }
 
 namespace Prelude {
-    template<typename t114, typename t115, typename t116, typename t117, typename t119, typename t120, typename t121>
-    juniper::function<juniper::closures::closuret_1<juniper::function<t115, juniper::function<t116, juniper::function<t117, t114(t121)>(t120)>(t119)>>, t114(t119, t120, t121)> uncurry3(juniper::function<t115, juniper::function<t116, juniper::function<t117, t114(t121)>(t120)>(t119)> f) {
-        return (([&]() -> juniper::function<juniper::closures::closuret_1<juniper::function<t115, juniper::function<t116, juniper::function<t117, t114(t121)>(t120)>(t119)>>, t114(t119, t120, t121)> {
-            using a = t119;
-            using b = t120;
-            using c = t121;
-            using d = t114;
-            return juniper::function<juniper::closures::closuret_1<juniper::function<t115, juniper::function<t116, juniper::function<t117, t114(t121)>(t120)>(t119)>>, t114(t119,t120,t121)>(juniper::closures::closuret_1<juniper::function<t115, juniper::function<t116, juniper::function<t117, t114(t121)>(t120)>(t119)>>(f), [](juniper::closures::closuret_1<juniper::function<t115, juniper::function<t116, juniper::function<t117, t114(t121)>(t120)>(t119)>>& junclosure, t119 valueA, t120 valueB, t121 valueC) -> t114 { 
-                juniper::function<t115, juniper::function<t116, juniper::function<t117, t114(t121)>(t120)>(t119)>& f = junclosure.f;
+    template<typename t125, typename t126, typename t127, typename t128, typename t130, typename t131, typename t132>
+    juniper::function<juniper::closures::closuret_1<juniper::function<t126, juniper::function<t127, juniper::function<t128, t125(t132)>(t131)>(t130)>>, t125(t130, t131, t132)> uncurry3(juniper::function<t126, juniper::function<t127, juniper::function<t128, t125(t132)>(t131)>(t130)> f) {
+        return (([&]() -> juniper::function<juniper::closures::closuret_1<juniper::function<t126, juniper::function<t127, juniper::function<t128, t125(t132)>(t131)>(t130)>>, t125(t130, t131, t132)> {
+            using a = t130;
+            using b = t131;
+            using c = t132;
+            using d = t125;
+            return juniper::function<juniper::closures::closuret_1<juniper::function<t126, juniper::function<t127, juniper::function<t128, t125(t132)>(t131)>(t130)>>, t125(t130,t131,t132)>(juniper::closures::closuret_1<juniper::function<t126, juniper::function<t127, juniper::function<t128, t125(t132)>(t131)>(t130)>>(f), [](juniper::closures::closuret_1<juniper::function<t126, juniper::function<t127, juniper::function<t128, t125(t132)>(t131)>(t130)>>& junclosure, t130 valueA, t131 valueB, t132 valueC) -> t125 { 
+                juniper::function<t126, juniper::function<t127, juniper::function<t128, t125(t132)>(t131)>(t130)>& f = junclosure.f;
                 return f(valueA)(valueB)(valueC);
              });
         })());
@@ -3396,46 +3516,46 @@ namespace Prelude {
 }
 
 namespace Prelude {
-    template<typename t132>
-    bool eq(t132 x, t132 y) {
+    template<typename t143>
+    bool eq(t143 x, t143 y) {
         return (([&]() -> bool {
-            using a = t132;
+            using a = t143;
             return ((bool) (x == y));
         })());
     }
 }
 
 namespace Prelude {
-    template<typename t138>
-    bool neq(t138 x, t138 y) {
+    template<typename t148>
+    bool neq(t148 x, t148 y) {
         return ((bool) (x != y));
     }
 }
 
 namespace Prelude {
-    template<typename t144, typename t145>
-    bool gt(t144 x, t145 y) {
+    template<typename t155, typename t156>
+    bool gt(t156 x, t155 y) {
         return ((bool) (x > y));
     }
 }
 
 namespace Prelude {
-    template<typename t151, typename t152>
-    bool geq(t151 x, t152 y) {
+    template<typename t162, typename t163>
+    bool geq(t163 x, t162 y) {
         return ((bool) (x >= y));
     }
 }
 
 namespace Prelude {
-    template<typename t158, typename t159>
-    bool lt(t158 x, t159 y) {
+    template<typename t169, typename t170>
+    bool lt(t170 x, t169 y) {
         return ((bool) (x < y));
     }
 }
 
 namespace Prelude {
-    template<typename t165, typename t166>
-    bool leq(t165 x, t166 y) {
+    template<typename t176, typename t177>
+    bool leq(t177 x, t176 y) {
         return ((bool) (x <= y));
     }
 }
@@ -3459,30 +3579,30 @@ namespace Prelude {
 }
 
 namespace Prelude {
-    template<typename t189, typename t190, typename t191>
-    t190 apply(juniper::function<t191, t190(t189)> f, t189 x) {
-        return (([&]() -> t190 {
-            using a = t189;
-            using b = t190;
+    template<typename t200, typename t201, typename t202>
+    t201 apply(juniper::function<t202, t201(t200)> f, t200 x) {
+        return (([&]() -> t201 {
+            using a = t200;
+            using b = t201;
             return f(x);
         })());
     }
 }
 
 namespace Prelude {
-    template<typename t197, typename t198, typename t199, typename t200>
-    t199 apply2(juniper::function<t200, t199(t197, t198)> f, juniper::tuple2<t197, t198> tup) {
-        return (([&]() -> t199 {
-            using a = t197;
-            using b = t198;
-            using c = t199;
-            return (([&]() -> t199 {
-                juniper::tuple2<t197, t198> guid0 = tup;
+    template<typename t208, typename t209, typename t210, typename t211>
+    t210 apply2(juniper::function<t211, t210(t208, t209)> f, juniper::tuple2<t208, t209> tup) {
+        return (([&]() -> t210 {
+            using a = t208;
+            using b = t209;
+            using c = t210;
+            return (([&]() -> t210 {
+                juniper::tuple2<t208, t209> guid0 = tup;
                 if (!(true)) {
                     juniper::quit<juniper::unit>();
                 }
-                t198 b = (guid0).e2;
-                t197 a = (guid0).e1;
+                t209 b = (guid0).e2;
+                t208 a = (guid0).e1;
                 
                 return f(a, b);
             })());
@@ -3491,21 +3611,21 @@ namespace Prelude {
 }
 
 namespace Prelude {
-    template<typename t211, typename t212, typename t213, typename t214, typename t215>
-    t214 apply3(juniper::function<t215, t214(t211, t212, t213)> f, juniper::tuple3<t211, t212, t213> tup) {
-        return (([&]() -> t214 {
-            using a = t211;
-            using b = t212;
-            using c = t213;
-            using d = t214;
-            return (([&]() -> t214 {
-                juniper::tuple3<t211, t212, t213> guid1 = tup;
+    template<typename t222, typename t223, typename t224, typename t225, typename t226>
+    t225 apply3(juniper::function<t226, t225(t222, t223, t224)> f, juniper::tuple3<t222, t223, t224> tup) {
+        return (([&]() -> t225 {
+            using a = t222;
+            using b = t223;
+            using c = t224;
+            using d = t225;
+            return (([&]() -> t225 {
+                juniper::tuple3<t222, t223, t224> guid1 = tup;
                 if (!(true)) {
                     juniper::quit<juniper::unit>();
                 }
-                t213 c = (guid1).e3;
-                t212 b = (guid1).e2;
-                t211 a = (guid1).e1;
+                t224 c = (guid1).e3;
+                t223 b = (guid1).e2;
+                t222 a = (guid1).e1;
                 
                 return f(a, b, c);
             })());
@@ -3514,23 +3634,23 @@ namespace Prelude {
 }
 
 namespace Prelude {
-    template<typename t229, typename t230, typename t231, typename t232, typename t233, typename t234>
-    t233 apply4(juniper::function<t234, t233(t229, t230, t231, t232)> f, juniper::tuple4<t229, t230, t231, t232> tup) {
-        return (([&]() -> t233 {
-            using a = t229;
-            using b = t230;
-            using c = t231;
-            using d = t232;
-            using e = t233;
-            return (([&]() -> t233 {
-                juniper::tuple4<t229, t230, t231, t232> guid2 = tup;
+    template<typename t240, typename t241, typename t242, typename t243, typename t244, typename t245>
+    t244 apply4(juniper::function<t245, t244(t240, t241, t242, t243)> f, juniper::tuple4<t240, t241, t242, t243> tup) {
+        return (([&]() -> t244 {
+            using a = t240;
+            using b = t241;
+            using c = t242;
+            using d = t243;
+            using e = t244;
+            return (([&]() -> t244 {
+                juniper::tuple4<t240, t241, t242, t243> guid2 = tup;
                 if (!(true)) {
                     juniper::quit<juniper::unit>();
                 }
-                t232 d = (guid2).e4;
-                t231 c = (guid2).e3;
-                t230 b = (guid2).e2;
-                t229 a = (guid2).e1;
+                t243 d = (guid2).e4;
+                t242 c = (guid2).e3;
+                t241 b = (guid2).e2;
+                t240 a = (guid2).e1;
                 
                 return f(a, b, c, d);
             })());
@@ -3539,116 +3659,116 @@ namespace Prelude {
 }
 
 namespace Prelude {
-    template<typename t250, typename t251>
-    t250 fst(juniper::tuple2<t250, t251> tup) {
-        return (([&]() -> t250 {
-            using a = t250;
-            using b = t251;
-            return (([&]() -> t250 {
-                juniper::tuple2<t250, t251> guid3 = tup;
+    template<typename t261, typename t262>
+    t261 fst(juniper::tuple2<t261, t262> tup) {
+        return (([&]() -> t261 {
+            using a = t261;
+            using b = t262;
+            return (([&]() -> t261 {
+                juniper::tuple2<t261, t262> guid3 = tup;
                 return (true ? 
-                    (([&]() -> t250 {
-                        t250 x = (guid3).e1;
+                    (([&]() -> t261 {
+                        t261 x = (guid3).e1;
                         return x;
                     })())
                 :
-                    juniper::quit<t250>());
+                    juniper::quit<t261>());
             })());
         })());
     }
 }
 
 namespace Prelude {
-    template<typename t255, typename t256>
-    t256 snd(juniper::tuple2<t255, t256> tup) {
-        return (([&]() -> t256 {
-            using a = t255;
-            using b = t256;
-            return (([&]() -> t256 {
-                juniper::tuple2<t255, t256> guid4 = tup;
-                return (true ? 
-                    (([&]() -> t256 {
-                        t256 x = (guid4).e2;
-                        return x;
-                    })())
-                :
-                    juniper::quit<t256>());
-            })());
-        })());
-    }
-}
-
-namespace Prelude {
-    template<typename t260>
-    t260 add(t260 numA, t260 numB) {
-        return (([&]() -> t260 {
-            using a = t260;
-            return ((t260) (numA + numB));
-        })());
-    }
-}
-
-namespace Prelude {
-    template<typename t262>
-    t262 sub(t262 numA, t262 numB) {
-        return (([&]() -> t262 {
-            using a = t262;
-            return ((t262) (numA - numB));
-        })());
-    }
-}
-
-namespace Prelude {
-    template<typename t264>
-    t264 mul(t264 numA, t264 numB) {
-        return (([&]() -> t264 {
-            using a = t264;
-            return ((t264) (numA * numB));
-        })());
-    }
-}
-
-namespace Prelude {
-    template<typename t266>
-    t266 div(t266 numA, t266 numB) {
-        return (([&]() -> t266 {
+    template<typename t266, typename t267>
+    t267 snd(juniper::tuple2<t266, t267> tup) {
+        return (([&]() -> t267 {
             using a = t266;
-            return ((t266) (numA / numB));
+            using b = t267;
+            return (([&]() -> t267 {
+                juniper::tuple2<t266, t267> guid4 = tup;
+                return (true ? 
+                    (([&]() -> t267 {
+                        t267 x = (guid4).e2;
+                        return x;
+                    })())
+                :
+                    juniper::quit<t267>());
+            })());
         })());
     }
 }
 
 namespace Prelude {
-    template<typename t272, typename t273>
-    juniper::tuple2<t273, t272> swap(juniper::tuple2<t272, t273> tup) {
-        return (([&]() -> juniper::tuple2<t273, t272> {
-            juniper::tuple2<t272, t273> guid5 = tup;
+    template<typename t271>
+    t271 add(t271 numA, t271 numB) {
+        return (([&]() -> t271 {
+            using a = t271;
+            return ((t271) (numA + numB));
+        })());
+    }
+}
+
+namespace Prelude {
+    template<typename t273>
+    t273 sub(t273 numA, t273 numB) {
+        return (([&]() -> t273 {
+            using a = t273;
+            return ((t273) (numA - numB));
+        })());
+    }
+}
+
+namespace Prelude {
+    template<typename t275>
+    t275 mul(t275 numA, t275 numB) {
+        return (([&]() -> t275 {
+            using a = t275;
+            return ((t275) (numA * numB));
+        })());
+    }
+}
+
+namespace Prelude {
+    template<typename t277>
+    t277 div(t277 numA, t277 numB) {
+        return (([&]() -> t277 {
+            using a = t277;
+            return ((t277) (numA / numB));
+        })());
+    }
+}
+
+namespace Prelude {
+    template<typename t283, typename t284>
+    juniper::tuple2<t284, t283> swap(juniper::tuple2<t283, t284> tup) {
+        return (([&]() -> juniper::tuple2<t284, t283> {
+            juniper::tuple2<t283, t284> guid5 = tup;
             if (!(true)) {
                 juniper::quit<juniper::unit>();
             }
-            t273 beta = (guid5).e2;
-            t272 alpha = (guid5).e1;
+            t284 beta = (guid5).e2;
+            t283 alpha = (guid5).e1;
             
-            return (juniper::tuple2<t273,t272>{beta, alpha});
+            return (juniper::tuple2<t284,t283>{beta, alpha});
         })());
     }
 }
 
 namespace Prelude {
-    template<typename t279, typename t280, typename t281>
-    t279 until(juniper::function<t280, bool(t279)> p, juniper::function<t281, t279(t279)> f, t279 a0) {
-        return (([&]() -> t279 {
-            using a = t279;
-            return (([&]() -> t279 {
-                t279 guid6 = a0;
+    template<typename t290, typename t291, typename t292>
+    t290 until(juniper::function<t292, bool(t290)> p, juniper::function<t291, t290(t290)> f, t290 a0) {
+        return (([&]() -> t290 {
+            using a = t290;
+            return (([&]() -> t290 {
+                t290 guid6 = a0;
                 if (!(true)) {
                     juniper::quit<juniper::unit>();
                 }
-                t279 a = guid6;
+                t290 a = guid6;
                 
                 (([&]() -> juniper::unit {
                     while (!(p(a))) {
-                        (([&]() -> t279 {
+                        (([&]() -> t290 {
                             return (a = f(a));
                         })());
                     }
@@ -3661,11 +3781,68 @@ namespace Prelude {
 }
 
 namespace Prelude {
-    template<typename t290>
-    juniper::unit ignore(t290 val) {
+    template<typename t301>
+    juniper::unit ignore(t301 val) {
         return (([&]() -> juniper::unit {
-            using a = t290;
+            using a = t301;
             return juniper::unit();
+        })());
+    }
+}
+
+namespace Prelude {
+    template<typename t304>
+    juniper::unit clear(t304& val) {
+        return (([&]() -> juniper::unit {
+            using a = t304;
+            return (([&]() -> juniper::unit {
+                
+    val.~a();
+    memset(&val, 0, sizeof(val));
+    
+                return {};
+            })());
+        })());
+    }
+}
+
+namespace Prelude {
+    template<typename t306, int c4>
+    juniper::array<t306, c4> array(t306 elem) {
+        return (([&]() -> juniper::array<t306, c4> {
+            using a = t306;
+            constexpr int32_t n = c4;
+            return (([&]() -> juniper::array<t306, c4> {
+                juniper::array<t306, c4> ret;
+                
+                (([&]() -> juniper::unit {
+                    int32_t guid7 = ((int32_t) 0);
+                    int32_t guid8 = n;
+                    for (int32_t i = guid7; i < guid8; i++) {
+                        (([&]() -> t306 {
+                            return ((ret)[i] = elem);
+                        })());
+                    }
+                    return {};
+                })());
+                return ret;
+            })());
+        })());
+    }
+}
+
+namespace Prelude {
+    template<typename t312, int c6>
+    juniper::array<t312, c6> zeros() {
+        return (([&]() -> juniper::array<t312, c6> {
+            using a = t312;
+            constexpr int32_t n = c6;
+            return (([&]() -> juniper::array<t312, c6> {
+                juniper::array<t312, c6> ret;
+                
+                clear<juniper::array<t312, c6>>(ret);
+                return ret;
+            })());
         })());
     }
 }
@@ -4455,10 +4632,10 @@ namespace Prelude {
 }
 
 namespace Prelude {
-    template<typename t349>
-    uint8_t toUInt8(t349 n) {
+    template<typename t375>
+    uint8_t toUInt8(t375 n) {
         return (([&]() -> uint8_t {
-            using t = t349;
+            using t = t375;
             return (([&]() -> uint8_t {
                 uint8_t ret;
                 
@@ -4473,10 +4650,10 @@ namespace Prelude {
 }
 
 namespace Prelude {
-    template<typename t351>
-    int8_t toInt8(t351 n) {
+    template<typename t377>
+    int8_t toInt8(t377 n) {
         return (([&]() -> int8_t {
-            using t = t351;
+            using t = t377;
             return (([&]() -> int8_t {
                 int8_t ret;
                 
@@ -4491,10 +4668,10 @@ namespace Prelude {
 }
 
 namespace Prelude {
-    template<typename t353>
-    uint16_t toUInt16(t353 n) {
+    template<typename t379>
+    uint16_t toUInt16(t379 n) {
         return (([&]() -> uint16_t {
-            using t = t353;
+            using t = t379;
             return (([&]() -> uint16_t {
                 uint16_t ret;
                 
@@ -4509,10 +4686,10 @@ namespace Prelude {
 }
 
 namespace Prelude {
-    template<typename t355>
-    int16_t toInt16(t355 n) {
+    template<typename t381>
+    int16_t toInt16(t381 n) {
         return (([&]() -> int16_t {
-            using t = t355;
+            using t = t381;
             return (([&]() -> int16_t {
                 int16_t ret;
                 
@@ -4527,10 +4704,10 @@ namespace Prelude {
 }
 
 namespace Prelude {
-    template<typename t357>
-    uint32_t toUInt32(t357 n) {
+    template<typename t383>
+    uint32_t toUInt32(t383 n) {
         return (([&]() -> uint32_t {
-            using t = t357;
+            using t = t383;
             return (([&]() -> uint32_t {
                 uint32_t ret;
                 
@@ -4545,10 +4722,10 @@ namespace Prelude {
 }
 
 namespace Prelude {
-    template<typename t359>
-    int32_t toInt32(t359 n) {
+    template<typename t385>
+    int32_t toInt32(t385 n) {
         return (([&]() -> int32_t {
-            using t = t359;
+            using t = t385;
             return (([&]() -> int32_t {
                 int32_t ret;
                 
@@ -4563,10 +4740,10 @@ namespace Prelude {
 }
 
 namespace Prelude {
-    template<typename t361>
-    float toFloat(t361 n) {
+    template<typename t387>
+    float toFloat(t387 n) {
         return (([&]() -> float {
-            using t = t361;
+            using t = t387;
             return (([&]() -> float {
                 float ret;
                 
@@ -4581,10 +4758,10 @@ namespace Prelude {
 }
 
 namespace Prelude {
-    template<typename t363>
-    double toDouble(t363 n) {
+    template<typename t389>
+    double toDouble(t389 n) {
         return (([&]() -> double {
-            using t = t363;
+            using t = t389;
             return (([&]() -> double {
                 double ret;
                 
@@ -4599,12 +4776,12 @@ namespace Prelude {
 }
 
 namespace Prelude {
-    template<typename t365>
-    t365 fromUInt8(uint8_t n) {
-        return (([&]() -> t365 {
-            using t = t365;
-            return (([&]() -> t365 {
-                t365 ret;
+    template<typename t391>
+    t391 fromUInt8(uint8_t n) {
+        return (([&]() -> t391 {
+            using t = t391;
+            return (([&]() -> t391 {
+                t391 ret;
                 
                 (([&]() -> juniper::unit {
                     ret = (t) n;
@@ -4617,12 +4794,12 @@ namespace Prelude {
 }
 
 namespace Prelude {
-    template<typename t367>
-    t367 fromInt8(int8_t n) {
-        return (([&]() -> t367 {
-            using t = t367;
-            return (([&]() -> t367 {
-                t367 ret;
+    template<typename t393>
+    t393 fromInt8(int8_t n) {
+        return (([&]() -> t393 {
+            using t = t393;
+            return (([&]() -> t393 {
+                t393 ret;
                 
                 (([&]() -> juniper::unit {
                     ret = (t) n;
@@ -4635,12 +4812,12 @@ namespace Prelude {
 }
 
 namespace Prelude {
-    template<typename t369>
-    t369 fromUInt16(uint16_t n) {
-        return (([&]() -> t369 {
-            using t = t369;
-            return (([&]() -> t369 {
-                t369 ret;
+    template<typename t395>
+    t395 fromUInt16(uint16_t n) {
+        return (([&]() -> t395 {
+            using t = t395;
+            return (([&]() -> t395 {
+                t395 ret;
                 
                 (([&]() -> juniper::unit {
                     ret = (t) n;
@@ -4653,12 +4830,12 @@ namespace Prelude {
 }
 
 namespace Prelude {
-    template<typename t371>
-    t371 fromInt16(int16_t n) {
-        return (([&]() -> t371 {
-            using t = t371;
-            return (([&]() -> t371 {
-                t371 ret;
+    template<typename t397>
+    t397 fromInt16(int16_t n) {
+        return (([&]() -> t397 {
+            using t = t397;
+            return (([&]() -> t397 {
+                t397 ret;
                 
                 (([&]() -> juniper::unit {
                     ret = (t) n;
@@ -4671,12 +4848,12 @@ namespace Prelude {
 }
 
 namespace Prelude {
-    template<typename t373>
-    t373 fromUInt32(uint32_t n) {
-        return (([&]() -> t373 {
-            using t = t373;
-            return (([&]() -> t373 {
-                t373 ret;
+    template<typename t399>
+    t399 fromUInt32(uint32_t n) {
+        return (([&]() -> t399 {
+            using t = t399;
+            return (([&]() -> t399 {
+                t399 ret;
                 
                 (([&]() -> juniper::unit {
                     ret = (t) n;
@@ -4689,12 +4866,12 @@ namespace Prelude {
 }
 
 namespace Prelude {
-    template<typename t375>
-    t375 fromInt32(int32_t n) {
-        return (([&]() -> t375 {
-            using t = t375;
-            return (([&]() -> t375 {
-                t375 ret;
+    template<typename t401>
+    t401 fromInt32(int32_t n) {
+        return (([&]() -> t401 {
+            using t = t401;
+            return (([&]() -> t401 {
+                t401 ret;
                 
                 (([&]() -> juniper::unit {
                     ret = (t) n;
@@ -4707,12 +4884,12 @@ namespace Prelude {
 }
 
 namespace Prelude {
-    template<typename t377>
-    t377 fromFloat(float n) {
-        return (([&]() -> t377 {
-            using t = t377;
-            return (([&]() -> t377 {
-                t377 ret;
+    template<typename t403>
+    t403 fromFloat(float n) {
+        return (([&]() -> t403 {
+            using t = t403;
+            return (([&]() -> t403 {
+                t403 ret;
                 
                 (([&]() -> juniper::unit {
                     ret = (t) n;
@@ -4725,12 +4902,12 @@ namespace Prelude {
 }
 
 namespace Prelude {
-    template<typename t379>
-    t379 fromDouble(double n) {
-        return (([&]() -> t379 {
-            using t = t379;
-            return (([&]() -> t379 {
-                t379 ret;
+    template<typename t405>
+    t405 fromDouble(double n) {
+        return (([&]() -> t405 {
+            using t = t405;
+            return (([&]() -> t405 {
+                t405 ret;
                 
                 (([&]() -> juniper::unit {
                     ret = (t) n;
@@ -4743,13 +4920,13 @@ namespace Prelude {
 }
 
 namespace Prelude {
-    template<typename t381, typename t382>
-    t382 cast(t381 x) {
-        return (([&]() -> t382 {
-            using a = t381;
-            using b = t382;
-            return (([&]() -> t382 {
-                t382 ret;
+    template<typename t407, typename t408>
+    t408 cast(t407 x) {
+        return (([&]() -> t408 {
+            using a = t407;
+            using b = t408;
+            return (([&]() -> t408 {
+                t408 ret;
                 
                 (([&]() -> juniper::unit {
                     ret = (b) x;
@@ -4762,34 +4939,50 @@ namespace Prelude {
 }
 
 namespace List {
-    template<typename t387, typename t390, typename t394, int c4>
-    juniper::records::recordt_0<juniper::array<t394, c4>, uint32_t> map(juniper::function<t387, t394(t390)> f, juniper::records::recordt_0<juniper::array<t390, c4>, uint32_t> lst) {
-        return (([&]() -> juniper::records::recordt_0<juniper::array<t394, c4>, uint32_t> {
-            using a = t390;
-            using b = t394;
-            constexpr int32_t n = c4;
-            return (([&]() -> juniper::records::recordt_0<juniper::array<t394, c4>, uint32_t> {
-                juniper::array<t394, c4> guid7 = (juniper::array<t394, c4>());
+    template<typename t411, int c7>
+    juniper::records::recordt_0<juniper::array<t411, c7>, uint32_t> empty() {
+        return (([&]() -> juniper::records::recordt_0<juniper::array<t411, c7>, uint32_t> {
+            using a = t411;
+            constexpr int32_t n = c7;
+            return (([&]() -> juniper::records::recordt_0<juniper::array<t411, c7>, uint32_t>{
+                juniper::records::recordt_0<juniper::array<t411, c7>, uint32_t> guid9;
+                guid9.data = zeros<t411, c7>();
+                guid9.length = ((uint32_t) 0);
+                return guid9;
+            })());
+        })());
+    }
+}
+
+namespace List {
+    template<typename t418, typename t419, typename t425, int c9>
+    juniper::records::recordt_0<juniper::array<t418, c9>, uint32_t> map(juniper::function<t419, t418(t425)> f, juniper::records::recordt_0<juniper::array<t425, c9>, uint32_t> lst) {
+        return (([&]() -> juniper::records::recordt_0<juniper::array<t418, c9>, uint32_t> {
+            using a = t425;
+            using b = t418;
+            constexpr int32_t n = c9;
+            return (([&]() -> juniper::records::recordt_0<juniper::array<t418, c9>, uint32_t> {
+                juniper::array<t418, c9> guid10 = zeros<t418, c9>();
                 if (!(true)) {
                     juniper::quit<juniper::unit>();
                 }
-                juniper::array<t394, c4> ret = guid7;
+                juniper::array<t418, c9> ret = guid10;
                 
                 (([&]() -> juniper::unit {
-                    uint32_t guid8 = ((uint32_t) 0);
-                    uint32_t guid9 = (lst).length;
-                    for (uint32_t i = guid8; i < guid9; i++) {
-                        (([&]() -> t394 {
+                    uint32_t guid11 = ((uint32_t) 0);
+                    uint32_t guid12 = (lst).length;
+                    for (uint32_t i = guid11; i < guid12; i++) {
+                        (([&]() -> t418 {
                             return ((ret)[i] = f(((lst).data)[i]));
                         })());
                     }
                     return {};
                 })());
-                return (([&]() -> juniper::records::recordt_0<juniper::array<t394, c4>, uint32_t>{
-                    juniper::records::recordt_0<juniper::array<t394, c4>, uint32_t> guid10;
-                    guid10.data = ret;
-                    guid10.length = (lst).length;
-                    return guid10;
+                return (([&]() -> juniper::records::recordt_0<juniper::array<t418, c9>, uint32_t>{
+                    juniper::records::recordt_0<juniper::array<t418, c9>, uint32_t> guid13;
+                    guid13.data = ret;
+                    guid13.length = (lst).length;
+                    return guid13;
                 })());
             })());
         })());
@@ -4797,24 +4990,24 @@ namespace List {
 }
 
 namespace List {
-    template<typename t398, typename t400, typename t403, int c7>
-    t398 foldl(juniper::function<t400, t398(t403, t398)> f, t398 initState, juniper::records::recordt_0<juniper::array<t403, c7>, uint32_t> lst) {
-        return (([&]() -> t398 {
-            using state = t398;
-            using t = t403;
-            constexpr int32_t n = c7;
-            return (([&]() -> t398 {
-                t398 guid11 = initState;
+    template<typename t433, typename t435, typename t438, int c13>
+    t433 fold(juniper::function<t435, t433(t438, t433)> f, t433 initState, juniper::records::recordt_0<juniper::array<t438, c13>, uint32_t> lst) {
+        return (([&]() -> t433 {
+            using state = t433;
+            using t = t438;
+            constexpr int32_t n = c13;
+            return (([&]() -> t433 {
+                t433 guid14 = initState;
                 if (!(true)) {
                     juniper::quit<juniper::unit>();
                 }
-                t398 s = guid11;
+                t433 s = guid14;
                 
                 (([&]() -> juniper::unit {
-                    uint32_t guid12 = ((uint32_t) 0);
-                    uint32_t guid13 = (lst).length;
-                    for (uint32_t i = guid12; i < guid13; i++) {
-                        (([&]() -> t398 {
+                    uint32_t guid15 = ((uint32_t) 0);
+                    uint32_t guid16 = (lst).length;
+                    for (uint32_t i = guid15; i < guid16; i++) {
+                        (([&]() -> t433 {
                             return (s = f(((lst).data)[i], s));
                         })());
                     }
@@ -4827,33 +5020,33 @@ namespace List {
 }
 
 namespace List {
-    template<typename t410, typename t412, typename t418, int c9>
-    t410 foldr(juniper::function<t412, t410(t418, t410)> f, t410 initState, juniper::records::recordt_0<juniper::array<t418, c9>, uint32_t> lst) {
-        return (([&]() -> t410 {
-            using state = t410;
-            using t = t418;
-            constexpr int32_t n = c9;
+    template<typename t445, typename t447, typename t453, int c15>
+    t445 foldBack(juniper::function<t447, t445(t453, t445)> f, t445 initState, juniper::records::recordt_0<juniper::array<t453, c15>, uint32_t> lst) {
+        return (([&]() -> t445 {
+            using state = t445;
+            using t = t453;
+            constexpr int32_t n = c15;
             return (((bool) ((lst).length == ((uint32_t) 0))) ? 
-                (([&]() -> t410 {
+                (([&]() -> t445 {
                     return initState;
                 })())
             :
-                (([&]() -> t410 {
-                    t410 guid14 = initState;
+                (([&]() -> t445 {
+                    t445 guid17 = initState;
                     if (!(true)) {
                         juniper::quit<juniper::unit>();
                     }
-                    t410 s = guid14;
+                    t445 s = guid17;
                     
-                    uint32_t guid15 = (lst).length;
+                    uint32_t guid18 = (lst).length;
                     if (!(true)) {
                         juniper::quit<juniper::unit>();
                     }
-                    uint32_t i = guid15;
+                    uint32_t i = guid18;
                     
                     (([&]() -> juniper::unit {
                         do {
-                            (([&]() -> t410 {
+                            (([&]() -> t445 {
                                 (i = ((uint32_t) (i - ((uint32_t) 1))));
                                 return (s = f(((lst).data)[i], s));
                             })());
@@ -4867,35 +5060,138 @@ namespace List {
 }
 
 namespace List {
-    template<typename t435, int c11, int c12, int c13>
-    juniper::records::recordt_0<juniper::array<t435, c13>, uint32_t> append(juniper::records::recordt_0<juniper::array<t435, c11>, uint32_t> lstA, juniper::records::recordt_0<juniper::array<t435, c12>, uint32_t> lstB) {
-        return (([&]() -> juniper::records::recordt_0<juniper::array<t435, c13>, uint32_t> {
-            using t = t435;
-            constexpr int32_t aCap = c11;
-            constexpr int32_t bCap = c12;
-            constexpr int32_t retCap = c13;
-            return (([&]() -> juniper::records::recordt_0<juniper::array<t435, c13>, uint32_t> {
-                uint32_t guid16 = ((uint32_t) 0);
+    template<typename t461, typename t463, int c17>
+    t463 reduce(juniper::function<t461, t463(t463, t463)> f, juniper::records::recordt_0<juniper::array<t463, c17>, uint32_t> lst) {
+        return (([&]() -> t463 {
+            using t = t463;
+            constexpr int32_t n = c17;
+            return (([&]() -> t463 {
+                t463 guid19 = ((lst).data)[((uint32_t) 0)];
                 if (!(true)) {
                     juniper::quit<juniper::unit>();
                 }
-                uint32_t j = guid16;
+                t463 s = guid19;
                 
-                juniper::records::recordt_0<juniper::array<t435, c13>, uint32_t> guid17 = (([&]() -> juniper::records::recordt_0<juniper::array<t435, c13>, uint32_t>{
-                    juniper::records::recordt_0<juniper::array<t435, c13>, uint32_t> guid18;
-                    guid18.data = (juniper::array<t435, c13>());
-                    guid18.length = ((uint32_t) ((lstA).length + (lstB).length));
-                    return guid18;
+                (([&]() -> juniper::unit {
+                    uint32_t guid20 = ((uint32_t) 1);
+                    uint32_t guid21 = (lst).length;
+                    for (uint32_t i = guid20; i < guid21; i++) {
+                        (([&]() -> t463 {
+                            return (s = f(((lst).data)[i], s));
+                        })());
+                    }
+                    return {};
+                })());
+                return s;
+            })());
+        })());
+    }
+}
+
+namespace List {
+    template<typename t474, typename t475, int c20>
+    Prelude::maybe<t474> tryReduce(juniper::function<t475, t474(t474, t474)> f, juniper::records::recordt_0<juniper::array<t474, c20>, uint32_t> lst) {
+        return (([&]() -> Prelude::maybe<t474> {
+            using t = t474;
+            constexpr int32_t n = c20;
+            return (([&]() -> Prelude::maybe<t474> {
+                return (((bool) ((lst).length == ((uint32_t) 0))) ? 
+                    (([&]() -> Prelude::maybe<t474> {
+                        return nothing<t474>();
+                    })())
+                :
+                    (([&]() -> Prelude::maybe<t474> {
+                        return just<t474>(reduce<t475, t474, c20>(f, lst));
+                    })()));
+            })());
+        })());
+    }
+}
+
+namespace List {
+    template<typename t518, typename t522, int c22>
+    t522 reduceBack(juniper::function<t518, t522(t522, t522)> f, juniper::records::recordt_0<juniper::array<t522, c22>, uint32_t> lst) {
+        return (([&]() -> t522 {
+            using t = t522;
+            constexpr int32_t n = c22;
+            return (([&]() -> t522 {
+                t522 guid22 = ((lst).data)[((uint32_t) ((lst).length - ((uint32_t) 1)))];
+                if (!(true)) {
+                    juniper::quit<juniper::unit>();
+                }
+                t522 s = guid22;
+                
+                uint32_t guid23 = ((uint32_t) ((lst).length - ((uint32_t) 1)));
+                if (!(true)) {
+                    juniper::quit<juniper::unit>();
+                }
+                uint32_t i = guid23;
+                
+                (([&]() -> juniper::unit {
+                    do {
+                        (([&]() -> t522 {
+                            (i = ((uint32_t) (i - ((uint32_t) 1))));
+                            return (s = f(((lst).data)[i], s));
+                        })());
+                    } while(((bool) (i > ((uint32_t) 0))));
+                    return {};
+                })());
+                return s;
+            })());
+        })());
+    }
+}
+
+namespace List {
+    template<typename t534, typename t535, int c25>
+    Prelude::maybe<t534> tryReduceBack(juniper::function<t535, t534(t534, t534)> f, juniper::records::recordt_0<juniper::array<t534, c25>, uint32_t> lst) {
+        return (([&]() -> Prelude::maybe<t534> {
+            using t = t534;
+            constexpr int32_t n = c25;
+            return (([&]() -> Prelude::maybe<t534> {
+                return (((bool) ((lst).length == ((uint32_t) 0))) ? 
+                    (([&]() -> Prelude::maybe<t534> {
+                        return nothing<t534>();
+                    })())
+                :
+                    (([&]() -> Prelude::maybe<t534> {
+                        return just<t534>(reduceBack<t535, t534, c25>(f, lst));
+                    })()));
+            })());
+        })());
+    }
+}
+
+namespace List {
+    template<typename t590, int c27, int c28, int c29>
+    juniper::records::recordt_0<juniper::array<t590, c29>, uint32_t> concat(juniper::records::recordt_0<juniper::array<t590, c27>, uint32_t> lstA, juniper::records::recordt_0<juniper::array<t590, c28>, uint32_t> lstB) {
+        return (([&]() -> juniper::records::recordt_0<juniper::array<t590, c29>, uint32_t> {
+            using t = t590;
+            constexpr int32_t aCap = c27;
+            constexpr int32_t bCap = c28;
+            constexpr int32_t retCap = c29;
+            return (([&]() -> juniper::records::recordt_0<juniper::array<t590, c29>, uint32_t> {
+                uint32_t guid24 = ((uint32_t) 0);
+                if (!(true)) {
+                    juniper::quit<juniper::unit>();
+                }
+                uint32_t j = guid24;
+                
+                juniper::records::recordt_0<juniper::array<t590, c29>, uint32_t> guid25 = (([&]() -> juniper::records::recordt_0<juniper::array<t590, c29>, uint32_t>{
+                    juniper::records::recordt_0<juniper::array<t590, c29>, uint32_t> guid26;
+                    guid26.data = zeros<t590, c29>();
+                    guid26.length = ((uint32_t) ((lstA).length + (lstB).length));
+                    return guid26;
                 })());
                 if (!(true)) {
                     juniper::quit<juniper::unit>();
                 }
-                juniper::records::recordt_0<juniper::array<t435, c13>, uint32_t> out = guid17;
+                juniper::records::recordt_0<juniper::array<t590, c29>, uint32_t> out = guid25;
                 
                 (([&]() -> juniper::unit {
-                    uint32_t guid19 = ((uint32_t) 0);
-                    uint32_t guid20 = (lstA).length;
-                    for (uint32_t i = guid19; i < guid20; i++) {
+                    uint32_t guid27 = ((uint32_t) 0);
+                    uint32_t guid28 = (lstA).length;
+                    for (uint32_t i = guid27; i < guid28; i++) {
                         (([&]() -> uint32_t {
                             (((out).data)[j] = ((lstA).data)[i]);
                             return (j += ((uint32_t) 1));
@@ -4904,9 +5200,9 @@ namespace List {
                     return {};
                 })());
                 (([&]() -> juniper::unit {
-                    uint32_t guid21 = ((uint32_t) 0);
-                    uint32_t guid22 = (lstB).length;
-                    for (uint32_t i = guid21; i < guid22; i++) {
+                    uint32_t guid29 = ((uint32_t) 0);
+                    uint32_t guid30 = (lstB).length;
+                    for (uint32_t i = guid29; i < guid30; i++) {
                         (([&]() -> uint32_t {
                             (((out).data)[j] = ((lstB).data)[i]);
                             return (j += ((uint32_t) 1));
@@ -4921,48 +5217,74 @@ namespace List {
 }
 
 namespace List {
-    template<typename t448, int c18>
-    Prelude::maybe<t448> nth(uint32_t i, juniper::records::recordt_0<juniper::array<t448, c18>, uint32_t> lst) {
-        return (([&]() -> Prelude::maybe<t448> {
-            using t = t448;
-            constexpr int32_t n = c18;
-            return (((bool) (i < (lst).length)) ? 
-                just<t448>(((lst).data)[i])
-            :
-                nothing<t448>());
+    template<typename t595, int c35, int c36>
+    juniper::records::recordt_0<juniper::array<t595, (((c35)*(-1))+((c36)*(-1)))*(-1)>, uint32_t> concatSafe(juniper::records::recordt_0<juniper::array<t595, c35>, uint32_t> lstA, juniper::records::recordt_0<juniper::array<t595, c36>, uint32_t> lstB) {
+        return (([&]() -> juniper::records::recordt_0<juniper::array<t595, (((c35)*(-1))+((c36)*(-1)))*(-1)>, uint32_t> {
+            using t = t595;
+            constexpr int32_t aCap = c35;
+            constexpr int32_t bCap = c36;
+            return concat<t595, c35, c36, (((c35)*(-1))+((c36)*(-1)))*(-1)>(lstA, lstB);
         })());
     }
 }
 
 namespace List {
-    template<typename t460, int c20, int c21>
-    juniper::records::recordt_0<juniper::array<t460, (c21)*(c20)>, uint32_t> flattenSafe(juniper::records::recordt_0<juniper::array<juniper::records::recordt_0<juniper::array<t460, c20>, uint32_t>, c21>, uint32_t> listOfLists) {
-        return (([&]() -> juniper::records::recordt_0<juniper::array<t460, (c21)*(c20)>, uint32_t> {
-            using t = t460;
-            constexpr int32_t m = c20;
-            constexpr int32_t n = c21;
-            return (([&]() -> juniper::records::recordt_0<juniper::array<t460, (c21)*(c20)>, uint32_t> {
-                juniper::array<t460, (c21)*(c20)> guid23 = (juniper::array<t460, (c21)*(c20)>());
+    template<typename t603, typename t605, int c40>
+    t605 get(t603 i, juniper::records::recordt_0<juniper::array<t605, c40>, uint32_t> lst) {
+        return (([&]() -> t605 {
+            using t = t605;
+            using u = t603;
+            constexpr int32_t n = c40;
+            return ((lst).data)[i];
+        })());
+    }
+}
+
+namespace List {
+    template<typename t608, typename t616, int c42>
+    Prelude::maybe<t616> tryGet(t608 i, juniper::records::recordt_0<juniper::array<t616, c42>, uint32_t> lst) {
+        return (([&]() -> Prelude::maybe<t616> {
+            using t = t616;
+            using u = t608;
+            constexpr int32_t n = c42;
+            return (((bool) (i < (lst).length)) ? 
+                just<t616>(((lst).data)[i])
+            :
+                nothing<t616>());
+        })());
+    }
+}
+
+namespace List {
+    template<typename t649, int c44, int c45, int c46>
+    juniper::records::recordt_0<juniper::array<t649, c46>, uint32_t> flatten(juniper::records::recordt_0<juniper::array<juniper::records::recordt_0<juniper::array<t649, c44>, uint32_t>, c45>, uint32_t> listOfLists) {
+        return (([&]() -> juniper::records::recordt_0<juniper::array<t649, c46>, uint32_t> {
+            using t = t649;
+            constexpr int32_t m = c44;
+            constexpr int32_t n = c45;
+            constexpr int32_t retCap = c46;
+            return (([&]() -> juniper::records::recordt_0<juniper::array<t649, c46>, uint32_t> {
+                juniper::array<t649, c46> guid31 = zeros<t649, c46>();
                 if (!(true)) {
                     juniper::quit<juniper::unit>();
                 }
-                juniper::array<t460, (c21)*(c20)> ret = guid23;
+                juniper::array<t649, c46> ret = guid31;
                 
-                uint32_t guid24 = ((uint32_t) 0);
+                uint32_t guid32 = ((uint32_t) 0);
                 if (!(true)) {
                     juniper::quit<juniper::unit>();
                 }
-                uint32_t index = guid24;
+                uint32_t index = guid32;
                 
                 (([&]() -> juniper::unit {
-                    uint32_t guid25 = ((uint32_t) 0);
-                    uint32_t guid26 = (listOfLists).length;
-                    for (uint32_t i = guid25; i < guid26; i++) {
+                    uint32_t guid33 = ((uint32_t) 0);
+                    uint32_t guid34 = (listOfLists).length;
+                    for (uint32_t i = guid33; i < guid34; i++) {
                         (([&]() -> juniper::unit {
                             return (([&]() -> juniper::unit {
-                                uint32_t guid27 = ((uint32_t) 0);
-                                uint32_t guid28 = (((listOfLists).data)[i]).length;
-                                for (uint32_t j = guid27; j < guid28; j++) {
+                                uint32_t guid35 = ((uint32_t) 0);
+                                uint32_t guid36 = (((listOfLists).data)[i]).length;
+                                for (uint32_t j = guid35; j < guid36; j++) {
                                     (([&]() -> uint32_t {
                                         ((ret)[index] = ((((listOfLists).data)[i]).data)[j]);
                                         return (index += ((uint32_t) 1));
@@ -4974,28 +5296,40 @@ namespace List {
                     }
                     return {};
                 })());
-                return (([&]() -> juniper::records::recordt_0<juniper::array<t460, (c21)*(c20)>, uint32_t>{
-                    juniper::records::recordt_0<juniper::array<t460, (c21)*(c20)>, uint32_t> guid29;
-                    guid29.data = ret;
-                    guid29.length = index;
-                    return guid29;
+                return (([&]() -> juniper::records::recordt_0<juniper::array<t649, c46>, uint32_t>{
+                    juniper::records::recordt_0<juniper::array<t649, c46>, uint32_t> guid37;
+                    guid37.data = ret;
+                    guid37.length = index;
+                    return guid37;
                 })());
             })());
         })());
     }
 }
 
+namespace List {
+    template<typename t653, int c52, int c53>
+    juniper::records::recordt_0<juniper::array<t653, (c53)*(c52)>, uint32_t> flattenSafe(juniper::records::recordt_0<juniper::array<juniper::records::recordt_0<juniper::array<t653, c52>, uint32_t>, c53>, uint32_t> listOfLists) {
+        return (([&]() -> juniper::records::recordt_0<juniper::array<t653, (c53)*(c52)>, uint32_t> {
+            using t = t653;
+            constexpr int32_t m = c52;
+            constexpr int32_t n = c53;
+            return flatten<t653, c52, c53, (c53)*(c52)>(listOfLists);
+        })());
+    }
+}
+
 namespace Math {
-    template<typename t464>
-    t464 min_(t464 x, t464 y) {
-        return (([&]() -> t464 {
-            using a = t464;
+    template<typename t659>
+    t659 min_(t659 x, t659 y) {
+        return (([&]() -> t659 {
+            using a = t659;
             return (((bool) (x > y)) ? 
-                (([&]() -> t464 {
+                (([&]() -> t659 {
                     return y;
                 })())
             :
-                (([&]() -> t464 {
+                (([&]() -> t659 {
                     return x;
                 })()));
         })());
@@ -5003,34 +5337,34 @@ namespace Math {
 }
 
 namespace List {
-    template<typename t478, int c26, int c27>
-    juniper::records::recordt_0<juniper::array<t478, c26>, uint32_t> resize(juniper::records::recordt_0<juniper::array<t478, c27>, uint32_t> lst) {
-        return (([&]() -> juniper::records::recordt_0<juniper::array<t478, c26>, uint32_t> {
-            using t = t478;
-            constexpr int32_t m = c26;
-            constexpr int32_t n = c27;
-            return (([&]() -> juniper::records::recordt_0<juniper::array<t478, c26>, uint32_t> {
-                juniper::array<t478, c26> guid30 = (juniper::array<t478, c26>());
+    template<typename t676, int c57, int c58>
+    juniper::records::recordt_0<juniper::array<t676, c57>, uint32_t> resize(juniper::records::recordt_0<juniper::array<t676, c58>, uint32_t> lst) {
+        return (([&]() -> juniper::records::recordt_0<juniper::array<t676, c57>, uint32_t> {
+            using t = t676;
+            constexpr int32_t m = c57;
+            constexpr int32_t n = c58;
+            return (([&]() -> juniper::records::recordt_0<juniper::array<t676, c57>, uint32_t> {
+                juniper::array<t676, c57> guid38 = zeros<t676, c57>();
                 if (!(true)) {
                     juniper::quit<juniper::unit>();
                 }
-                juniper::array<t478, c26> ret = guid30;
+                juniper::array<t676, c57> ret = guid38;
                 
                 (([&]() -> juniper::unit {
-                    uint32_t guid31 = ((uint32_t) 0);
-                    uint32_t guid32 = Math::min_<uint32_t>((lst).length, toUInt32<int32_t>(m));
-                    for (uint32_t i = guid31; i < guid32; i++) {
-                        (([&]() -> t478 {
+                    uint32_t guid39 = ((uint32_t) 0);
+                    uint32_t guid40 = Math::min_<uint32_t>((lst).length, toUInt32<int32_t>(m));
+                    for (uint32_t i = guid39; i < guid40; i++) {
+                        (([&]() -> t676 {
                             return ((ret)[i] = ((lst).data)[i]);
                         })());
                     }
                     return {};
                 })());
-                return (([&]() -> juniper::records::recordt_0<juniper::array<t478, c26>, uint32_t>{
-                    juniper::records::recordt_0<juniper::array<t478, c26>, uint32_t> guid33;
-                    guid33.data = ret;
-                    guid33.length = (lst).length;
-                    return guid33;
+                return (([&]() -> juniper::records::recordt_0<juniper::array<t676, c57>, uint32_t>{
+                    juniper::records::recordt_0<juniper::array<t676, c57>, uint32_t> guid41;
+                    guid41.data = ret;
+                    guid41.length = (lst).length;
+                    return guid41;
                 })());
             })());
         })());
@@ -5038,22 +5372,22 @@ namespace List {
 }
 
 namespace List {
-    template<typename t484, typename t487, int c30>
-    bool all(juniper::function<t484, bool(t487)> pred, juniper::records::recordt_0<juniper::array<t487, c30>, uint32_t> lst) {
+    template<typename t682, typename t685, int c62>
+    bool all(juniper::function<t682, bool(t685)> pred, juniper::records::recordt_0<juniper::array<t685, c62>, uint32_t> lst) {
         return (([&]() -> bool {
-            using t = t487;
-            constexpr int32_t n = c30;
+            using t = t685;
+            constexpr int32_t n = c62;
             return (([&]() -> bool {
-                bool guid34 = true;
+                bool guid42 = true;
                 if (!(true)) {
                     juniper::quit<juniper::unit>();
                 }
-                bool satisfied = guid34;
+                bool satisfied = guid42;
                 
                 (([&]() -> juniper::unit {
-                    uint32_t guid35 = ((uint32_t) 0);
-                    uint32_t guid36 = (lst).length;
-                    for (uint32_t i = guid35; i < guid36; i++) {
+                    uint32_t guid43 = ((uint32_t) 0);
+                    uint32_t guid44 = (lst).length;
+                    for (uint32_t i = guid43; i < guid44; i++) {
                         (([&]() -> juniper::unit {
                             return (([&]() -> juniper::unit {
                                 if (satisfied) {
@@ -5074,22 +5408,22 @@ namespace List {
 }
 
 namespace List {
-    template<typename t494, typename t497, int c32>
-    bool any(juniper::function<t494, bool(t497)> pred, juniper::records::recordt_0<juniper::array<t497, c32>, uint32_t> lst) {
+    template<typename t692, typename t695, int c64>
+    bool any(juniper::function<t692, bool(t695)> pred, juniper::records::recordt_0<juniper::array<t695, c64>, uint32_t> lst) {
         return (([&]() -> bool {
-            using t = t497;
-            constexpr int32_t n = c32;
+            using t = t695;
+            constexpr int32_t n = c64;
             return (([&]() -> bool {
-                bool guid37 = false;
+                bool guid45 = false;
                 if (!(true)) {
                     juniper::quit<juniper::unit>();
                 }
-                bool satisfied = guid37;
+                bool satisfied = guid45;
                 
                 (([&]() -> juniper::unit {
-                    uint32_t guid38 = ((uint32_t) 0);
-                    uint32_t guid39 = (lst).length;
-                    for (uint32_t i = guid38; i < guid39; i++) {
+                    uint32_t guid46 = ((uint32_t) 0);
+                    uint32_t guid47 = (lst).length;
+                    for (uint32_t i = guid46; i < guid47; i++) {
                         (([&]() -> juniper::unit {
                             return (([&]() -> juniper::unit {
                                 if (!(satisfied)) {
@@ -5110,55 +5444,141 @@ namespace List {
 }
 
 namespace List {
-    template<typename t502, int c34>
-    juniper::records::recordt_0<juniper::array<t502, c34>, uint32_t> pushBack(t502 elem, juniper::records::recordt_0<juniper::array<t502, c34>, uint32_t> lst) {
-        return (([&]() -> juniper::records::recordt_0<juniper::array<t502, c34>, uint32_t> {
-            using t = t502;
-            constexpr int32_t n = c34;
-            return (((bool) ((lst).length >= n)) ? 
-                (([&]() -> juniper::records::recordt_0<juniper::array<t502, c34>, uint32_t> {
-                    return lst;
-                })())
-            :
-                (([&]() -> juniper::records::recordt_0<juniper::array<t502, c34>, uint32_t> {
-                    juniper::records::recordt_0<juniper::array<t502, c34>, uint32_t> guid40 = lst;
-                    if (!(true)) {
-                        juniper::quit<juniper::unit>();
-                    }
-                    juniper::records::recordt_0<juniper::array<t502, c34>, uint32_t> ret = guid40;
-                    
-                    (((ret).data)[(lst).length] = elem);
-                    ((ret).length += ((uint32_t) 1));
-                    return ret;
-                })()));
+    template<typename t700, int c66>
+    juniper::unit append(t700 elem, juniper::records::recordt_0<juniper::array<t700, c66>, uint32_t>& lst) {
+        return (([&]() -> juniper::unit {
+            using t = t700;
+            constexpr int32_t n = c66;
+            return (([&]() -> juniper::unit {
+                if (((bool) ((lst).length < n))) {
+                    (([&]() -> uint32_t {
+                        (((lst).data)[(lst).length] = elem);
+                        return ((lst).length += ((uint32_t) 1));
+                    })());
+                }
+                return {};
+            })());
         })());
     }
 }
 
 namespace List {
-    template<typename t517, int c36>
-    juniper::records::recordt_0<juniper::array<t517, c36>, uint32_t> pushOffFront(t517 elem, juniper::records::recordt_0<juniper::array<t517, c36>, uint32_t> lst) {
-        return (([&]() -> juniper::records::recordt_0<juniper::array<t517, c36>, uint32_t> {
-            using t = t517;
-            constexpr int32_t n = c36;
-            return (([&]() -> juniper::records::recordt_0<juniper::array<t517, c36>, uint32_t> {
+    template<typename t708, int c68>
+    juniper::records::recordt_0<juniper::array<t708, c68>, uint32_t> appendPure(t708 elem, juniper::records::recordt_0<juniper::array<t708, c68>, uint32_t> lst) {
+        return (([&]() -> juniper::records::recordt_0<juniper::array<t708, c68>, uint32_t> {
+            using t = t708;
+            constexpr int32_t n = c68;
+            return (([&]() -> juniper::records::recordt_0<juniper::array<t708, c68>, uint32_t> {
+                (([&]() -> juniper::unit {
+                    if (((bool) ((lst).length < n))) {
+                        (([&]() -> uint32_t {
+                            (((lst).data)[(lst).length] = elem);
+                            return ((lst).length += ((uint32_t) 1));
+                        })());
+                    }
+                    return {};
+                })());
+                return lst;
+            })());
+        })());
+    }
+}
+
+namespace List {
+    template<typename t716, int c70>
+    juniper::records::recordt_0<juniper::array<t716, ((-1)+((c70)*(-1)))*(-1)>, uint32_t> appendSafe(t716 elem, juniper::records::recordt_0<juniper::array<t716, c70>, uint32_t> lst) {
+        return (([&]() -> juniper::records::recordt_0<juniper::array<t716, ((-1)+((c70)*(-1)))*(-1)>, uint32_t> {
+            using t = t716;
+            constexpr int32_t n = c70;
+            return (([&]() -> juniper::records::recordt_0<juniper::array<t716, ((-1)+((c70)*(-1)))*(-1)>, uint32_t> {
+                juniper::records::recordt_0<juniper::array<t716, ((-1)+((c70)*(-1)))*(-1)>, uint32_t> guid48 = resize<t716, ((-1)+((c70)*(-1)))*(-1), c70>(lst);
+                if (!(true)) {
+                    juniper::quit<juniper::unit>();
+                }
+                juniper::records::recordt_0<juniper::array<t716, ((-1)+((c70)*(-1)))*(-1)>, uint32_t> ret = guid48;
+                
+                (((ret).data)[(lst).length] = elem);
+                ((ret).length += ((uint32_t) 1));
+                return ret;
+            })());
+        })());
+    }
+}
+
+namespace List {
+    template<typename t731, int c74>
+    juniper::unit prepend(t731 elem, juniper::records::recordt_0<juniper::array<t731, c74>, uint32_t>& lst) {
+        return (([&]() -> juniper::unit {
+            using t = t731;
+            constexpr int32_t n = c74;
+            return (([&]() -> juniper::unit {
                 return (((bool) (n <= ((int32_t) 0))) ? 
-                    (([&]() -> juniper::records::recordt_0<juniper::array<t517, c36>, uint32_t> {
+                    (([&]() -> juniper::unit {
+                        return juniper::unit();
+                    })())
+                :
+                    (([&]() -> juniper::unit {
+                        uint32_t guid49 = (lst).length;
+                        if (!(true)) {
+                            juniper::quit<juniper::unit>();
+                        }
+                        uint32_t i = guid49;
+                        
+                        (([&]() -> juniper::unit {
+                            do {
+                                (([&]() -> uint32_t {
+                                    (([&]() -> juniper::unit {
+                                        if (((bool) (i < n))) {
+                                            (([&]() -> t731 {
+                                                return (((lst).data)[i] = ((lst).data)[((uint32_t) (i - ((uint32_t) 1)))]);
+                                            })());
+                                        }
+                                        return {};
+                                    })());
+                                    return (i -= ((uint32_t) 1));
+                                })());
+                            } while(((bool) (i > ((uint32_t) 0))));
+                            return {};
+                        })());
+                        (((lst).data)[((uint32_t) 0)] = elem);
+                        return (([&]() -> juniper::unit {
+                            if (((bool) ((lst).length < n))) {
+                                (([&]() -> uint32_t {
+                                    return ((lst).length += ((uint32_t) 1));
+                                })());
+                            }
+                            return {};
+                        })());
+                    })()));
+            })());
+        })());
+    }
+}
+
+namespace List {
+    template<typename t748, int c78>
+    juniper::records::recordt_0<juniper::array<t748, c78>, uint32_t> prependPure(t748 elem, juniper::records::recordt_0<juniper::array<t748, c78>, uint32_t> lst) {
+        return (([&]() -> juniper::records::recordt_0<juniper::array<t748, c78>, uint32_t> {
+            using t = t748;
+            constexpr int32_t n = c78;
+            return (([&]() -> juniper::records::recordt_0<juniper::array<t748, c78>, uint32_t> {
+                return (((bool) (n <= ((int32_t) 0))) ? 
+                    (([&]() -> juniper::records::recordt_0<juniper::array<t748, c78>, uint32_t> {
                         return lst;
                     })())
                 :
-                    (([&]() -> juniper::records::recordt_0<juniper::array<t517, c36>, uint32_t> {
-                        juniper::records::recordt_0<juniper::array<t517, c36>, uint32_t> ret;
+                    (([&]() -> juniper::records::recordt_0<juniper::array<t748, c78>, uint32_t> {
+                        juniper::records::recordt_0<juniper::array<t748, c78>, uint32_t> ret;
                         
                         (((ret).data)[((uint32_t) 0)] = elem);
                         (([&]() -> juniper::unit {
-                            uint32_t guid41 = ((uint32_t) 0);
-                            uint32_t guid42 = (lst).length;
-                            for (uint32_t i = guid41; i < guid42; i++) {
+                            uint32_t guid50 = ((uint32_t) 0);
+                            uint32_t guid51 = (lst).length;
+                            for (uint32_t i = guid50; i < guid51; i++) {
                                 (([&]() -> juniper::unit {
                                     return (([&]() -> juniper::unit {
                                         if (((bool) (((uint32_t) (i + ((uint32_t) 1))) < n))) {
-                                            (([&]() -> t517 {
+                                            (([&]() -> t748 {
                                                 return (((ret).data)[((uint32_t) (i + ((uint32_t) 1)))] = ((lst).data)[i]);
                                             })());
                                         }
@@ -5184,69 +5604,101 @@ namespace List {
 }
 
 namespace List {
-    template<typename t532, int c40>
-    juniper::records::recordt_0<juniper::array<t532, c40>, uint32_t> setNth(uint32_t index, t532 elem, juniper::records::recordt_0<juniper::array<t532, c40>, uint32_t> lst) {
-        return (([&]() -> juniper::records::recordt_0<juniper::array<t532, c40>, uint32_t> {
-            using t = t532;
-            constexpr int32_t n = c40;
-            return (((bool) (index < (lst).length)) ? 
-                (([&]() -> juniper::records::recordt_0<juniper::array<t532, c40>, uint32_t> {
-                    juniper::records::recordt_0<juniper::array<t532, c40>, uint32_t> guid43 = lst;
-                    if (!(true)) {
-                        juniper::quit<juniper::unit>();
-                    }
-                    juniper::records::recordt_0<juniper::array<t532, c40>, uint32_t> ret = guid43;
-                    
-                    (((ret).data)[index] = elem);
-                    return ret;
-                })())
-            :
-                (([&]() -> juniper::records::recordt_0<juniper::array<t532, c40>, uint32_t> {
-                    return lst;
-                })()));
-        })());
-    }
-}
-
-namespace List {
-    template<typename t537, int c42>
-    juniper::records::recordt_0<juniper::array<t537, c42>, uint32_t> replicate(uint32_t numOfElements, t537 elem) {
-        return (([&]() -> juniper::records::recordt_0<juniper::array<t537, c42>, uint32_t> {
-            using t = t537;
-            constexpr int32_t n = c42;
-            return (([&]() -> juniper::records::recordt_0<juniper::array<t537, c42>, uint32_t>{
-                juniper::records::recordt_0<juniper::array<t537, c42>, uint32_t> guid44;
-                guid44.data = (juniper::array<t537, c42>().fill(elem));
-                guid44.length = numOfElements;
-                return guid44;
+    template<typename t763, int c82>
+    juniper::unit set(uint32_t index, t763 elem, juniper::records::recordt_0<juniper::array<t763, c82>, uint32_t>& lst) {
+        return (([&]() -> juniper::unit {
+            using t = t763;
+            constexpr int32_t n = c82;
+            return (([&]() -> juniper::unit {
+                if (((bool) (index < (lst).length))) {
+                    (([&]() -> t763 {
+                        return (((lst).data)[index] = elem);
+                    })());
+                }
+                return {};
             })());
         })());
     }
 }
 
 namespace List {
-    template<typename t548, int c43>
-    juniper::records::recordt_0<juniper::array<t548, c43>, uint32_t> remove(t548 elem, juniper::records::recordt_0<juniper::array<t548, c43>, uint32_t> lst) {
-        return (([&]() -> juniper::records::recordt_0<juniper::array<t548, c43>, uint32_t> {
-            using t = t548;
-            constexpr int32_t n = c43;
-            return (([&]() -> juniper::records::recordt_0<juniper::array<t548, c43>, uint32_t> {
-                uint32_t guid45 = ((uint32_t) 0);
+    template<typename t768, int c84>
+    juniper::records::recordt_0<juniper::array<t768, c84>, uint32_t> setPure(uint32_t index, t768 elem, juniper::records::recordt_0<juniper::array<t768, c84>, uint32_t> lst) {
+        return (([&]() -> juniper::records::recordt_0<juniper::array<t768, c84>, uint32_t> {
+            using t = t768;
+            constexpr int32_t n = c84;
+            return (([&]() -> juniper::records::recordt_0<juniper::array<t768, c84>, uint32_t> {
+                (([&]() -> juniper::unit {
+                    if (((bool) (index < (lst).length))) {
+                        (([&]() -> t768 {
+                            return (((lst).data)[index] = elem);
+                        })());
+                    }
+                    return {};
+                })());
+                return lst;
+            })());
+        })());
+    }
+}
+
+namespace List {
+    template<typename t774, int c86>
+    juniper::records::recordt_0<juniper::array<t774, c86>, uint32_t> replicate(uint32_t numOfElements, t774 elem) {
+        return (([&]() -> juniper::records::recordt_0<juniper::array<t774, c86>, uint32_t> {
+            using t = t774;
+            constexpr int32_t n = c86;
+            return (([&]() -> juniper::records::recordt_0<juniper::array<t774, c86>, uint32_t> {
+                juniper::records::recordt_0<juniper::array<t774, c86>, uint32_t> guid52 = (([&]() -> juniper::records::recordt_0<juniper::array<t774, c86>, uint32_t>{
+                    juniper::records::recordt_0<juniper::array<t774, c86>, uint32_t> guid53;
+                    guid53.data = zeros<t774, c86>();
+                    guid53.length = numOfElements;
+                    return guid53;
+                })());
                 if (!(true)) {
                     juniper::quit<juniper::unit>();
                 }
-                uint32_t index = guid45;
-                
-                bool guid46 = false;
-                if (!(true)) {
-                    juniper::quit<juniper::unit>();
-                }
-                bool found = guid46;
+                juniper::records::recordt_0<juniper::array<t774, c86>, uint32_t> ret = guid52;
                 
                 (([&]() -> juniper::unit {
-                    uint32_t guid47 = ((uint32_t) 0);
-                    uint32_t guid48 = (lst).length;
-                    for (uint32_t i = guid47; i < guid48; i++) {
+                    uint32_t guid54 = ((uint32_t) 0);
+                    uint32_t guid55 = numOfElements;
+                    for (uint32_t i = guid54; i < guid55; i++) {
+                        (([&]() -> t774 {
+                            return (((ret).data)[i] = elem);
+                        })());
+                    }
+                    return {};
+                })());
+                return ret;
+            })());
+        })());
+    }
+}
+
+namespace List {
+    template<typename t795, int c89>
+    juniper::unit remove(t795 elem, juniper::records::recordt_0<juniper::array<t795, c89>, uint32_t>& lst) {
+        return (([&]() -> juniper::unit {
+            using t = t795;
+            constexpr int32_t n = c89;
+            return (([&]() -> juniper::unit {
+                uint32_t guid56 = ((uint32_t) 0);
+                if (!(true)) {
+                    juniper::quit<juniper::unit>();
+                }
+                uint32_t index = guid56;
+                
+                bool guid57 = false;
+                if (!(true)) {
+                    juniper::quit<juniper::unit>();
+                }
+                bool found = guid57;
+                
+                (([&]() -> juniper::unit {
+                    uint32_t guid58 = ((uint32_t) 0);
+                    uint32_t guid59 = (lst).length;
+                    for (uint32_t i = guid58; i < guid59; i++) {
                         (([&]() -> juniper::unit {
                             return (([&]() -> juniper::unit {
                                 if (((bool) (!(found) && ((bool) (((lst).data)[i] == elem))))) {
@@ -5261,77 +5713,87 @@ namespace List {
                     }
                     return {};
                 })());
-                return (found ? 
-                    (([&]() -> juniper::records::recordt_0<juniper::array<t548, c43>, uint32_t> {
-                        juniper::records::recordt_0<juniper::array<t548, c43>, uint32_t> guid49 = lst;
-                        if (!(true)) {
-                            juniper::quit<juniper::unit>();
-                        }
-                        juniper::records::recordt_0<juniper::array<t548, c43>, uint32_t> ret = guid49;
-                        
-                        ((ret).length -= ((uint32_t) 1));
+                return (([&]() -> juniper::unit {
+                    if (found) {
                         (([&]() -> juniper::unit {
-                            uint32_t guid50 = index;
-                            uint32_t guid51 = (lst).length;
-                            for (uint32_t i = guid50; i < guid51; i++) {
-                                (([&]() -> t548 {
-                                    return (((ret).data)[i] = ((lst).data)[((uint32_t) (i + ((uint32_t) 1)))]);
-                                })());
-                            }
-                            return {};
+                            ((lst).length -= ((uint32_t) 1));
+                            (([&]() -> juniper::unit {
+                                uint32_t guid60 = index;
+                                uint32_t guid61 = (lst).length;
+                                for (uint32_t i = guid60; i < guid61; i++) {
+                                    (([&]() -> t795 {
+                                        return (((lst).data)[i] = ((lst).data)[((uint32_t) (i + ((uint32_t) 1)))]);
+                                    })());
+                                }
+                                return {};
+                            })());
+                            return clear<t795>(((lst).data)[(lst).length]);
                         })());
-                        t548 dummy;
-                        
-                        (((ret).data)[((uint32_t) ((lst).length - ((uint32_t) 1)))] = dummy);
-                        return ret;
-                    })())
-                :
-                    (([&]() -> juniper::records::recordt_0<juniper::array<t548, c43>, uint32_t> {
-                        return lst;
-                    })()));
+                    }
+                    return {};
+                })());
             })());
         })());
     }
 }
 
 namespace List {
-    template<typename t556, int c48>
-    juniper::records::recordt_0<juniper::array<t556, c48>, uint32_t> dropLast(juniper::records::recordt_0<juniper::array<t556, c48>, uint32_t> lst) {
-        return (([&]() -> juniper::records::recordt_0<juniper::array<t556, c48>, uint32_t> {
-            using t = t556;
-            constexpr int32_t n = c48;
-            return (((bool) ((lst).length == ((uint32_t) 0))) ? 
-                (([&]() -> juniper::records::recordt_0<juniper::array<t556, c48>, uint32_t> {
-                    return lst;
-                })())
-            :
-                (([&]() -> juniper::records::recordt_0<juniper::array<t556, c48>, uint32_t> {
-                    juniper::records::recordt_0<juniper::array<t556, c48>, uint32_t> guid52 = lst;
-                    if (!(true)) {
-                        juniper::quit<juniper::unit>();
-                    }
-                    juniper::records::recordt_0<juniper::array<t556, c48>, uint32_t> ret = guid52;
-                    
-                    t556 dummy;
-                    
-                    ((ret).length -= ((uint32_t) 1));
-                    (((ret).data)[(ret).length] = dummy);
-                    return ret;
-                })()));
+    template<typename t802, int c94>
+    juniper::records::recordt_0<juniper::array<t802, c94>, uint32_t> removePure(t802 elem, juniper::records::recordt_0<juniper::array<t802, c94>, uint32_t> lst) {
+        return (([&]() -> juniper::records::recordt_0<juniper::array<t802, c94>, uint32_t> {
+            using t = t802;
+            constexpr int32_t n = c94;
+            return (([&]() -> juniper::records::recordt_0<juniper::array<t802, c94>, uint32_t> {
+                remove<t802, c94>(elem, lst);
+                return lst;
+            })());
         })());
     }
 }
 
 namespace List {
-    template<typename t566, typename t569, int c50>
-    juniper::unit foreach(juniper::function<t566, juniper::unit(t569)> f, juniper::records::recordt_0<juniper::array<t569, c50>, uint32_t> lst) {
+    template<typename t814, int c96>
+    juniper::unit pop(juniper::records::recordt_0<juniper::array<t814, c96>, uint32_t>& lst) {
         return (([&]() -> juniper::unit {
-            using t = t569;
-            constexpr int32_t n = c50;
+            using t = t814;
+            constexpr int32_t n = c96;
             return (([&]() -> juniper::unit {
-                uint32_t guid53 = ((uint32_t) 0);
-                uint32_t guid54 = (lst).length;
-                for (uint32_t i = guid53; i < guid54; i++) {
+                if (((bool) ((lst).length > ((uint32_t) 0)))) {
+                    (([&]() -> juniper::unit {
+                        ((lst).length -= ((uint32_t) 1));
+                        return clear<t814>(((lst).data)[(lst).length]);
+                    })());
+                }
+                return {};
+            })());
+        })());
+    }
+}
+
+namespace List {
+    template<typename t821, int c98>
+    juniper::records::recordt_0<juniper::array<t821, c98>, uint32_t> popPure(juniper::records::recordt_0<juniper::array<t821, c98>, uint32_t> lst) {
+        return (([&]() -> juniper::records::recordt_0<juniper::array<t821, c98>, uint32_t> {
+            using t = t821;
+            constexpr int32_t n = c98;
+            return (([&]() -> juniper::records::recordt_0<juniper::array<t821, c98>, uint32_t> {
+                pop<t821, c98>(lst);
+                return lst;
+            })());
+        })());
+    }
+}
+
+namespace List {
+    template<typename t829, typename t832, int c100>
+    juniper::unit iter(juniper::function<t829, juniper::unit(t832)> f, juniper::records::recordt_0<juniper::array<t832, c100>, uint32_t> lst) {
+        return (([&]() -> juniper::unit {
+            using t = t832;
+            constexpr int32_t n = c100;
+            return (([&]() -> juniper::unit {
+                uint32_t guid62 = ((uint32_t) 0);
+                uint32_t guid63 = (lst).length;
+                for (uint32_t i = guid62; i < guid63; i++) {
                     (([&]() -> juniper::unit {
                         return f(((lst).data)[i]);
                     })());
@@ -5343,49 +5805,60 @@ namespace List {
 }
 
 namespace List {
-    template<typename t584, int c52>
-    Prelude::maybe<t584> last(juniper::records::recordt_0<juniper::array<t584, c52>, uint32_t> lst) {
-        return (([&]() -> Prelude::maybe<t584> {
-            using t = t584;
-            constexpr int32_t n = c52;
+    template<typename t841, int c102>
+    t841 last(juniper::records::recordt_0<juniper::array<t841, c102>, uint32_t> lst) {
+        return (([&]() -> t841 {
+            using t = t841;
+            constexpr int32_t n = c102;
+            return ((lst).data)[((uint32_t) ((lst).length - ((uint32_t) 1)))];
+        })());
+    }
+}
+
+namespace List {
+    template<typename t853, int c104>
+    Prelude::maybe<t853> tryLast(juniper::records::recordt_0<juniper::array<t853, c104>, uint32_t> lst) {
+        return (([&]() -> Prelude::maybe<t853> {
+            using t = t853;
+            constexpr int32_t n = c104;
             return (((bool) ((lst).length == ((uint32_t) 0))) ? 
-                (([&]() -> Prelude::maybe<t584> {
-                    return nothing<t584>();
+                (([&]() -> Prelude::maybe<t853> {
+                    return nothing<t853>();
                 })())
             :
-                (([&]() -> Prelude::maybe<t584> {
-                    return just<t584>(((lst).data)[((uint32_t) ((lst).length - ((uint32_t) 1)))]);
+                (([&]() -> Prelude::maybe<t853> {
+                    return just<t853>(((lst).data)[((uint32_t) ((lst).length - ((uint32_t) 1)))]);
                 })()));
         })());
     }
 }
 
 namespace List {
-    template<typename t598, int c54>
-    Prelude::maybe<t598> max_(juniper::records::recordt_0<juniper::array<t598, c54>, uint32_t> lst) {
-        return (([&]() -> Prelude::maybe<t598> {
-            using t = t598;
-            constexpr int32_t n = c54;
+    template<typename t889, int c106>
+    Prelude::maybe<t889> tryMax(juniper::records::recordt_0<juniper::array<t889, c106>, uint32_t> lst) {
+        return (([&]() -> Prelude::maybe<t889> {
+            using t = t889;
+            constexpr int32_t n = c106;
             return (((bool) (((bool) ((lst).length == ((uint32_t) 0))) || ((bool) (n == ((int32_t) 0))))) ? 
-                (([&]() -> Prelude::maybe<t598> {
-                    return nothing<t598>();
+                (([&]() -> Prelude::maybe<t889> {
+                    return nothing<t889>();
                 })())
             :
-                (([&]() -> Prelude::maybe<t598> {
-                    t598 guid55 = ((lst).data)[((uint32_t) 0)];
+                (([&]() -> Prelude::maybe<t889> {
+                    t889 guid64 = ((lst).data)[((uint32_t) 0)];
                     if (!(true)) {
                         juniper::quit<juniper::unit>();
                     }
-                    t598 maxVal = guid55;
+                    t889 maxVal = guid64;
                     
                     (([&]() -> juniper::unit {
-                        uint32_t guid56 = ((uint32_t) 1);
-                        uint32_t guid57 = (lst).length;
-                        for (uint32_t i = guid56; i < guid57; i++) {
+                        uint32_t guid65 = ((uint32_t) 1);
+                        uint32_t guid66 = (lst).length;
+                        for (uint32_t i = guid65; i < guid66; i++) {
                             (([&]() -> juniper::unit {
                                 return (([&]() -> juniper::unit {
                                     if (((bool) (((lst).data)[i] > maxVal))) {
-                                        (([&]() -> t598 {
+                                        (([&]() -> t889 {
                                             return (maxVal = ((lst).data)[i]);
                                         })());
                                     }
@@ -5395,38 +5868,38 @@ namespace List {
                         }
                         return {};
                     })());
-                    return just<t598>(maxVal);
+                    return just<t889>(maxVal);
                 })()));
         })());
     }
 }
 
 namespace List {
-    template<typename t615, int c58>
-    Prelude::maybe<t615> min_(juniper::records::recordt_0<juniper::array<t615, c58>, uint32_t> lst) {
-        return (([&]() -> Prelude::maybe<t615> {
-            using t = t615;
-            constexpr int32_t n = c58;
+    template<typename t928, int c110>
+    Prelude::maybe<t928> tryMin(juniper::records::recordt_0<juniper::array<t928, c110>, uint32_t> lst) {
+        return (([&]() -> Prelude::maybe<t928> {
+            using t = t928;
+            constexpr int32_t n = c110;
             return (((bool) (((bool) ((lst).length == ((uint32_t) 0))) || ((bool) (n == ((int32_t) 0))))) ? 
-                (([&]() -> Prelude::maybe<t615> {
-                    return nothing<t615>();
+                (([&]() -> Prelude::maybe<t928> {
+                    return nothing<t928>();
                 })())
             :
-                (([&]() -> Prelude::maybe<t615> {
-                    t615 guid58 = ((lst).data)[((uint32_t) 0)];
+                (([&]() -> Prelude::maybe<t928> {
+                    t928 guid67 = ((lst).data)[((uint32_t) 0)];
                     if (!(true)) {
                         juniper::quit<juniper::unit>();
                     }
-                    t615 minVal = guid58;
+                    t928 minVal = guid67;
                     
                     (([&]() -> juniper::unit {
-                        uint32_t guid59 = ((uint32_t) 1);
-                        uint32_t guid60 = (lst).length;
-                        for (uint32_t i = guid59; i < guid60; i++) {
+                        uint32_t guid68 = ((uint32_t) 1);
+                        uint32_t guid69 = (lst).length;
+                        for (uint32_t i = guid68; i < guid69; i++) {
                             (([&]() -> juniper::unit {
                                 return (([&]() -> juniper::unit {
                                     if (((bool) (((lst).data)[i] < minVal))) {
-                                        (([&]() -> t615 {
+                                        (([&]() -> t928 {
                                             return (minVal = ((lst).data)[i]);
                                         })());
                                     }
@@ -5436,29 +5909,29 @@ namespace List {
                         }
                         return {};
                     })());
-                    return just<t615>(minVal);
+                    return just<t928>(minVal);
                 })()));
         })());
     }
 }
 
 namespace List {
-    template<typename t623, int c62>
-    bool member(t623 elem, juniper::records::recordt_0<juniper::array<t623, c62>, uint32_t> lst) {
+    template<typename t958, int c114>
+    bool member(t958 elem, juniper::records::recordt_0<juniper::array<t958, c114>, uint32_t> lst) {
         return (([&]() -> bool {
-            using t = t623;
-            constexpr int32_t n = c62;
+            using t = t958;
+            constexpr int32_t n = c114;
             return (([&]() -> bool {
-                bool guid61 = false;
+                bool guid70 = false;
                 if (!(true)) {
                     juniper::quit<juniper::unit>();
                 }
-                bool found = guid61;
+                bool found = guid70;
                 
                 (([&]() -> juniper::unit {
-                    uint32_t guid62 = ((uint32_t) 0);
-                    uint32_t guid63 = (lst).length;
-                    for (uint32_t i = guid62; i < guid63; i++) {
+                    uint32_t guid71 = ((uint32_t) 0);
+                    uint32_t guid72 = (lst).length;
+                    for (uint32_t i = guid71; i < guid72; i++) {
                         (([&]() -> juniper::unit {
                             return (([&]() -> juniper::unit {
                                 if (((bool) (!(found) && ((bool) (((lst).data)[i] == elem))))) {
@@ -5479,36 +5952,36 @@ namespace List {
 }
 
 namespace List {
-    template<typename t638, typename t640, int c64>
-    juniper::records::recordt_0<juniper::array<juniper::tuple2<t638, t640>, c64>, uint32_t> zip(juniper::records::recordt_0<juniper::array<t638, c64>, uint32_t> lstA, juniper::records::recordt_0<juniper::array<t640, c64>, uint32_t> lstB) {
-        return (([&]() -> juniper::records::recordt_0<juniper::array<juniper::tuple2<t638, t640>, c64>, uint32_t> {
-            using a = t638;
-            using b = t640;
-            constexpr int32_t n = c64;
-            return (([&]() -> juniper::records::recordt_0<juniper::array<juniper::tuple2<t638, t640>, c64>, uint32_t> {
-                uint32_t guid64 = Math::min_<uint32_t>((lstA).length, (lstB).length);
+    template<typename t976, typename t978, int c116>
+    juniper::records::recordt_0<juniper::array<juniper::tuple2<t976, t978>, c116>, uint32_t> zip(juniper::records::recordt_0<juniper::array<t976, c116>, uint32_t> lstA, juniper::records::recordt_0<juniper::array<t978, c116>, uint32_t> lstB) {
+        return (([&]() -> juniper::records::recordt_0<juniper::array<juniper::tuple2<t976, t978>, c116>, uint32_t> {
+            using a = t976;
+            using b = t978;
+            constexpr int32_t n = c116;
+            return (([&]() -> juniper::records::recordt_0<juniper::array<juniper::tuple2<t976, t978>, c116>, uint32_t> {
+                uint32_t guid73 = Math::min_<uint32_t>((lstA).length, (lstB).length);
                 if (!(true)) {
                     juniper::quit<juniper::unit>();
                 }
-                uint32_t outLen = guid64;
+                uint32_t outLen = guid73;
                 
-                juniper::records::recordt_0<juniper::array<juniper::tuple2<t638, t640>, c64>, uint32_t> guid65 = (([&]() -> juniper::records::recordt_0<juniper::array<juniper::tuple2<t638, t640>, c64>, uint32_t>{
-                    juniper::records::recordt_0<juniper::array<juniper::tuple2<t638, t640>, c64>, uint32_t> guid66;
-                    guid66.data = (juniper::array<juniper::tuple2<t638, t640>, c64>());
-                    guid66.length = outLen;
-                    return guid66;
+                juniper::records::recordt_0<juniper::array<juniper::tuple2<t976, t978>, c116>, uint32_t> guid74 = (([&]() -> juniper::records::recordt_0<juniper::array<juniper::tuple2<t976, t978>, c116>, uint32_t>{
+                    juniper::records::recordt_0<juniper::array<juniper::tuple2<t976, t978>, c116>, uint32_t> guid75;
+                    guid75.data = zeros<juniper::tuple2<t976, t978>, c116>();
+                    guid75.length = outLen;
+                    return guid75;
                 })());
                 if (!(true)) {
                     juniper::quit<juniper::unit>();
                 }
-                juniper::records::recordt_0<juniper::array<juniper::tuple2<t638, t640>, c64>, uint32_t> ret = guid65;
+                juniper::records::recordt_0<juniper::array<juniper::tuple2<t976, t978>, c116>, uint32_t> ret = guid74;
                 
                 (([&]() -> juniper::unit {
-                    uint32_t guid67 = ((uint32_t) 0);
-                    uint32_t guid68 = outLen;
-                    for (uint32_t i = guid67; i < guid68; i++) {
-                        (([&]() -> juniper::tuple2<t638, t640> {
-                            return (((ret).data)[i] = (juniper::tuple2<t638,t640>{((lstA).data)[i], ((lstB).data)[i]}));
+                    uint32_t guid76 = ((uint32_t) 0);
+                    uint32_t guid77 = outLen;
+                    for (uint32_t i = guid76; i < guid77; i++) {
+                        (([&]() -> juniper::tuple2<t976, t978> {
+                            return (((ret).data)[i] = (juniper::tuple2<t976,t978>{((lstA).data)[i], ((lstB).data)[i]}));
                         })());
                     }
                     return {};
@@ -5520,46 +5993,46 @@ namespace List {
 }
 
 namespace List {
-    template<typename t651, typename t652, int c68>
-    juniper::tuple2<juniper::records::recordt_0<juniper::array<t651, c68>, uint32_t>, juniper::records::recordt_0<juniper::array<t652, c68>, uint32_t>> unzip(juniper::records::recordt_0<juniper::array<juniper::tuple2<t651, t652>, c68>, uint32_t> lst) {
-        return (([&]() -> juniper::tuple2<juniper::records::recordt_0<juniper::array<t651, c68>, uint32_t>, juniper::records::recordt_0<juniper::array<t652, c68>, uint32_t>> {
-            using a = t651;
-            using b = t652;
-            constexpr int32_t n = c68;
-            return (([&]() -> juniper::tuple2<juniper::records::recordt_0<juniper::array<t651, c68>, uint32_t>, juniper::records::recordt_0<juniper::array<t652, c68>, uint32_t>> {
-                juniper::records::recordt_0<juniper::array<t651, c68>, uint32_t> guid69 = (([&]() -> juniper::records::recordt_0<juniper::array<t651, c68>, uint32_t>{
-                    juniper::records::recordt_0<juniper::array<t651, c68>, uint32_t> guid70;
-                    guid70.data = (juniper::array<t651, c68>());
-                    guid70.length = (lst).length;
-                    return guid70;
+    template<typename t995, typename t996, int c121>
+    juniper::tuple2<juniper::records::recordt_0<juniper::array<t995, c121>, uint32_t>, juniper::records::recordt_0<juniper::array<t996, c121>, uint32_t>> unzip(juniper::records::recordt_0<juniper::array<juniper::tuple2<t995, t996>, c121>, uint32_t> lst) {
+        return (([&]() -> juniper::tuple2<juniper::records::recordt_0<juniper::array<t995, c121>, uint32_t>, juniper::records::recordt_0<juniper::array<t996, c121>, uint32_t>> {
+            using a = t995;
+            using b = t996;
+            constexpr int32_t n = c121;
+            return (([&]() -> juniper::tuple2<juniper::records::recordt_0<juniper::array<t995, c121>, uint32_t>, juniper::records::recordt_0<juniper::array<t996, c121>, uint32_t>> {
+                juniper::records::recordt_0<juniper::array<t995, c121>, uint32_t> guid78 = (([&]() -> juniper::records::recordt_0<juniper::array<t995, c121>, uint32_t>{
+                    juniper::records::recordt_0<juniper::array<t995, c121>, uint32_t> guid79;
+                    guid79.data = zeros<t995, c121>();
+                    guid79.length = (lst).length;
+                    return guid79;
                 })());
                 if (!(true)) {
                     juniper::quit<juniper::unit>();
                 }
-                juniper::records::recordt_0<juniper::array<t651, c68>, uint32_t> retA = guid69;
+                juniper::records::recordt_0<juniper::array<t995, c121>, uint32_t> retA = guid78;
                 
-                juniper::records::recordt_0<juniper::array<t652, c68>, uint32_t> guid71 = (([&]() -> juniper::records::recordt_0<juniper::array<t652, c68>, uint32_t>{
-                    juniper::records::recordt_0<juniper::array<t652, c68>, uint32_t> guid72;
-                    guid72.data = (juniper::array<t652, c68>());
-                    guid72.length = (lst).length;
-                    return guid72;
+                juniper::records::recordt_0<juniper::array<t996, c121>, uint32_t> guid80 = (([&]() -> juniper::records::recordt_0<juniper::array<t996, c121>, uint32_t>{
+                    juniper::records::recordt_0<juniper::array<t996, c121>, uint32_t> guid81;
+                    guid81.data = zeros<t996, c121>();
+                    guid81.length = (lst).length;
+                    return guid81;
                 })());
                 if (!(true)) {
                     juniper::quit<juniper::unit>();
                 }
-                juniper::records::recordt_0<juniper::array<t652, c68>, uint32_t> retB = guid71;
+                juniper::records::recordt_0<juniper::array<t996, c121>, uint32_t> retB = guid80;
                 
                 (([&]() -> juniper::unit {
-                    uint32_t guid73 = ((uint32_t) 0);
-                    uint32_t guid74 = (lst).length;
-                    for (uint32_t i = guid73; i < guid74; i++) {
-                        (([&]() -> t652 {
-                            juniper::tuple2<t651, t652> guid75 = ((lst).data)[i];
+                    uint32_t guid82 = ((uint32_t) 0);
+                    uint32_t guid83 = (lst).length;
+                    for (uint32_t i = guid82; i < guid83; i++) {
+                        (([&]() -> t996 {
+                            juniper::tuple2<t995, t996> guid84 = ((lst).data)[i];
                             if (!(true)) {
                                 juniper::quit<juniper::unit>();
                             }
-                            t652 b = (guid75).e2;
-                            t651 a = (guid75).e1;
+                            t996 b = (guid84).e2;
+                            t995 a = (guid84).e1;
                             
                             (((retA).data)[i] = a);
                             return (((retB).data)[i] = b);
@@ -5567,102 +6040,224 @@ namespace List {
                     }
                     return {};
                 })());
-                return (juniper::tuple2<juniper::records::recordt_0<juniper::array<t651, c68>, uint32_t>,juniper::records::recordt_0<juniper::array<t652, c68>, uint32_t>>{retA, retB});
+                return (juniper::tuple2<juniper::records::recordt_0<juniper::array<t995, c121>, uint32_t>,juniper::records::recordt_0<juniper::array<t996, c121>, uint32_t>>{retA, retB});
             })());
         })());
     }
 }
 
 namespace List {
-    template<typename t660, int c72>
-    t660 sum(juniper::records::recordt_0<juniper::array<t660, c72>, uint32_t> lst) {
-        return (([&]() -> t660 {
-            using a = t660;
-            constexpr int32_t n = c72;
-            return List::foldl<t660, void, t660, c72>(Prelude::add<t660>, ((t660) 0), lst);
+    template<typename t1004, int c127>
+    t1004 sum(juniper::records::recordt_0<juniper::array<t1004, c127>, uint32_t> lst) {
+        return (([&]() -> t1004 {
+            using a = t1004;
+            constexpr int32_t n = c127;
+            return List::fold<t1004, void, t1004, c127>(Prelude::add<t1004>, ((t1004) 0), lst);
         })());
     }
 }
 
 namespace List {
-    template<typename t678, int c74>
-    t678 average(juniper::records::recordt_0<juniper::array<t678, c74>, uint32_t> lst) {
-        return (([&]() -> t678 {
-            using a = t678;
-            constexpr int32_t n = c74;
-            return ((t678) (sum<t678, c74>(lst) / cast<uint32_t, t678>((lst).length)));
+    template<typename t1022, int c129>
+    t1022 average(juniper::records::recordt_0<juniper::array<t1022, c129>, uint32_t> lst) {
+        return (([&]() -> t1022 {
+            using a = t1022;
+            constexpr int32_t n = c129;
+            return ((t1022) (sum<t1022, c129>(lst) / cast<uint32_t, t1022>((lst).length)));
         })());
     }
 }
 
 namespace List {
-    template<typename t684, typename t685, typename t686, int c76>
-    juniper::records::recordt_0<juniper::array<t686, c76>, uint32_t> sort(juniper::records::recordt_0<juniper::array<t686, c76>, uint32_t> lst, juniper::function<t684, t685(t686)> key) {
-        return (([&]() -> juniper::records::recordt_0<juniper::array<t686, c76>, uint32_t> {
-            using clos = t684;
-            using m = t685;
-            using t = t686;
-            constexpr int32_t n = c76;
-            return (([&]() -> juniper::records::recordt_0<juniper::array<t686, c76>, uint32_t> {
-                juniper::records::recordt_0<juniper::array<t686, c76>, uint32_t> guid76 = lst;
+    uint32_t iLeftChild(uint32_t i) {
+        return ((uint32_t) (((uint32_t) (((uint32_t) 2) * i)) + ((uint32_t) 1)));
+    }
+}
+
+namespace List {
+    uint32_t iRightChild(uint32_t i) {
+        return ((uint32_t) (((uint32_t) (((uint32_t) 2) * i)) + ((uint32_t) 2)));
+    }
+}
+
+namespace List {
+    uint32_t iParent(uint32_t i) {
+        return ((uint32_t) (((uint32_t) (i - ((uint32_t) 1))) / ((uint32_t) 2)));
+    }
+}
+
+namespace List {
+    template<typename t1047, typename t1049, typename t1051, typename t1082, int c131>
+    juniper::unit siftDown(juniper::records::recordt_0<juniper::array<t1082, c131>, uint32_t>& lst, juniper::function<t1051, t1047(t1082)> key, uint32_t root, t1049 end) {
+        return (([&]() -> juniper::unit {
+            using m = t1047;
+            using t = t1082;
+            constexpr int32_t n = c131;
+            return (([&]() -> juniper::unit {
+                bool guid85 = false;
                 if (!(true)) {
                     juniper::quit<juniper::unit>();
                 }
-                juniper::records::recordt_0<juniper::array<t686, c76>, uint32_t> lstCopy = guid76;
+                bool done = guid85;
                 
-                uint32_t guid77 = (lst).length;
-                if (!(true)) {
-                    juniper::quit<juniper::unit>();
-                }
-                uint32_t len = guid77;
-                
-                (([&]() -> juniper::unit {
-                    
-    quicksort<t, clos, m, n>(lstCopy, key, 0, len - 1);
-    
+                return (([&]() -> juniper::unit {
+                    while (((bool) (((bool) (iLeftChild(root) < end)) && !(done)))) {
+                        (([&]() -> juniper::unit {
+                            uint32_t guid86 = iLeftChild(root);
+                            if (!(true)) {
+                                juniper::quit<juniper::unit>();
+                            }
+                            uint32_t child = guid86;
+                            
+                            (([&]() -> juniper::unit {
+                                if (((bool) (((bool) (((uint32_t) (child + ((uint32_t) 1))) < end)) && ((bool) (key(((lst).data)[child]) < key(((lst).data)[((uint32_t) (child + ((uint32_t) 1)))])))))) {
+                                    (([&]() -> uint32_t {
+                                        return (child += ((uint32_t) 1));
+                                    })());
+                                }
+                                return {};
+                            })());
+                            return (((bool) (key(((lst).data)[root]) < key(((lst).data)[child]))) ? 
+                                (([&]() -> juniper::unit {
+                                    t1082 guid87 = ((lst).data)[root];
+                                    if (!(true)) {
+                                        juniper::quit<juniper::unit>();
+                                    }
+                                    t1082 tmp = guid87;
+                                    
+                                    (((lst).data)[root] = ((lst).data)[child]);
+                                    (((lst).data)[child] = tmp);
+                                    (root = child);
+                                    return juniper::unit();
+                                })())
+                            :
+                                (([&]() -> juniper::unit {
+                                    (done = true);
+                                    return juniper::unit();
+                                })()));
+                        })());
+                    }
                     return {};
                 })());
-                return lstCopy;
+            })());
+        })());
+    }
+}
+
+namespace List {
+    template<typename t1093, typename t1102, typename t1104, int c140>
+    juniper::unit heapify(juniper::records::recordt_0<juniper::array<t1093, c140>, uint32_t>& lst, juniper::function<t1104, t1102(t1093)> key) {
+        return (([&]() -> juniper::unit {
+            using t = t1093;
+            constexpr int32_t n = c140;
+            return (([&]() -> juniper::unit {
+                uint32_t guid88 = iParent(((uint32_t) ((lst).length + ((uint32_t) 1))));
+                if (!(true)) {
+                    juniper::quit<juniper::unit>();
+                }
+                uint32_t start = guid88;
+                
+                return (([&]() -> juniper::unit {
+                    while (((bool) (start > ((uint32_t) 0)))) {
+                        (([&]() -> juniper::unit {
+                            (start -= ((uint32_t) 1));
+                            return siftDown<t1102, uint32_t, t1104, t1093, c140>(lst, key, start, (lst).length);
+                        })());
+                    }
+                    return {};
+                })());
+            })());
+        })());
+    }
+}
+
+namespace List {
+    template<typename t1115, typename t1117, typename t1130, int c142>
+    juniper::unit sort(juniper::function<t1117, t1115(t1130)> key, juniper::records::recordt_0<juniper::array<t1130, c142>, uint32_t>& lst) {
+        return (([&]() -> juniper::unit {
+            using m = t1115;
+            using t = t1130;
+            constexpr int32_t n = c142;
+            return (([&]() -> juniper::unit {
+                heapify<t1130, t1115, t1117, c142>(lst, key);
+                uint32_t guid89 = (lst).length;
+                if (!(true)) {
+                    juniper::quit<juniper::unit>();
+                }
+                uint32_t end = guid89;
+                
+                return (([&]() -> juniper::unit {
+                    while (((bool) (end > ((uint32_t) 1)))) {
+                        (([&]() -> juniper::unit {
+                            (end -= ((uint32_t) 1));
+                            t1130 guid90 = ((lst).data)[((uint32_t) 0)];
+                            if (!(true)) {
+                                juniper::quit<juniper::unit>();
+                            }
+                            t1130 tmp = guid90;
+                            
+                            (((lst).data)[((uint32_t) 0)] = ((lst).data)[end]);
+                            (((lst).data)[end] = tmp);
+                            return siftDown<t1115, uint32_t, t1117, t1130, c142>(lst, key, ((uint32_t) 0), end);
+                        })());
+                    }
+                    return {};
+                })());
+            })());
+        })());
+    }
+}
+
+namespace List {
+    template<typename t1148, typename t1149, typename t1150, int c149>
+    juniper::records::recordt_0<juniper::array<t1149, c149>, uint32_t> sorted(juniper::function<t1150, t1148(t1149)> key, juniper::records::recordt_0<juniper::array<t1149, c149>, uint32_t> lst) {
+        return (([&]() -> juniper::records::recordt_0<juniper::array<t1149, c149>, uint32_t> {
+            using m = t1148;
+            using t = t1149;
+            constexpr int32_t n = c149;
+            return (([&]() -> juniper::records::recordt_0<juniper::array<t1149, c149>, uint32_t> {
+                sort<t1148, t1150, t1149, c149>(key, lst);
+                return lst;
             })());
         })());
     }
 }
 
 namespace Signal {
-    template<typename t690, typename t692, typename t707>
-    Prelude::sig<t707> map(juniper::function<t692, t707(t690)> f, Prelude::sig<t690> s) {
-        return (([&]() -> Prelude::sig<t707> {
-            using a = t690;
-            using b = t707;
-            return (([&]() -> Prelude::sig<t707> {
-                Prelude::sig<t690> guid78 = s;
-                return (((bool) (((bool) ((guid78).id() == ((uint8_t) 0))) && ((bool) (((bool) (((guid78).signal()).id() == ((uint8_t) 0))) && true)))) ? 
-                    (([&]() -> Prelude::sig<t707> {
-                        t690 val = ((guid78).signal()).just();
-                        return signal<t707>(just<t707>(f(val)));
+    template<typename t1160, typename t1162, typename t1177>
+    Prelude::sig<t1177> map(juniper::function<t1162, t1177(t1160)> f, Prelude::sig<t1160> s) {
+        return (([&]() -> Prelude::sig<t1177> {
+            using a = t1160;
+            using b = t1177;
+            return (([&]() -> Prelude::sig<t1177> {
+                Prelude::sig<t1160> guid91 = s;
+                return (((bool) (((bool) ((guid91).id() == ((uint8_t) 0))) && ((bool) (((bool) (((guid91).signal()).id() == ((uint8_t) 0))) && true)))) ? 
+                    (([&]() -> Prelude::sig<t1177> {
+                        t1160 val = ((guid91).signal()).just();
+                        return signal<t1177>(just<t1177>(f(val)));
                     })())
                 :
                     (true ? 
-                        (([&]() -> Prelude::sig<t707> {
-                            return signal<t707>(nothing<t707>());
+                        (([&]() -> Prelude::sig<t1177> {
+                            return signal<t1177>(nothing<t1177>());
                         })())
                     :
-                        juniper::quit<Prelude::sig<t707>>()));
+                        juniper::quit<Prelude::sig<t1177>>()));
             })());
         })());
     }
 }
 
 namespace Signal {
-    template<typename t715, typename t716>
-    juniper::unit sink(juniper::function<t716, juniper::unit(t715)> f, Prelude::sig<t715> s) {
+    template<typename t1246, typename t1247>
+    juniper::unit sink(juniper::function<t1247, juniper::unit(t1246)> f, Prelude::sig<t1246> s) {
         return (([&]() -> juniper::unit {
-            using a = t715;
+            using a = t1246;
             return (([&]() -> juniper::unit {
-                Prelude::sig<t715> guid79 = s;
-                return (((bool) (((bool) ((guid79).id() == ((uint8_t) 0))) && ((bool) (((bool) (((guid79).signal()).id() == ((uint8_t) 0))) && true)))) ? 
+                Prelude::sig<t1246> guid92 = s;
+                return (((bool) (((bool) ((guid92).id() == ((uint8_t) 0))) && ((bool) (((bool) (((guid92).signal()).id() == ((uint8_t) 0))) && true)))) ? 
                     (([&]() -> juniper::unit {
-                        t715 val = ((guid79).signal()).just();
+                        t1246 val = ((guid92).signal()).just();
                         return f(val);
                     })())
                 :
@@ -5678,138 +6273,138 @@ namespace Signal {
 }
 
 namespace Signal {
-    template<typename t725, typename t739>
-    Prelude::sig<t739> filter(juniper::function<t725, bool(t739)> f, Prelude::sig<t739> s) {
-        return (([&]() -> Prelude::sig<t739> {
-            using a = t739;
-            return (([&]() -> Prelude::sig<t739> {
-                Prelude::sig<t739> guid80 = s;
-                return (((bool) (((bool) ((guid80).id() == ((uint8_t) 0))) && ((bool) (((bool) (((guid80).signal()).id() == ((uint8_t) 0))) && true)))) ? 
-                    (([&]() -> Prelude::sig<t739> {
-                        t739 val = ((guid80).signal()).just();
+    template<typename t1270, typename t1284>
+    Prelude::sig<t1284> filter(juniper::function<t1270, bool(t1284)> f, Prelude::sig<t1284> s) {
+        return (([&]() -> Prelude::sig<t1284> {
+            using a = t1284;
+            return (([&]() -> Prelude::sig<t1284> {
+                Prelude::sig<t1284> guid93 = s;
+                return (((bool) (((bool) ((guid93).id() == ((uint8_t) 0))) && ((bool) (((bool) (((guid93).signal()).id() == ((uint8_t) 0))) && true)))) ? 
+                    (([&]() -> Prelude::sig<t1284> {
+                        t1284 val = ((guid93).signal()).just();
                         return (f(val) ? 
-                            (([&]() -> Prelude::sig<t739> {
-                                return signal<t739>(nothing<t739>());
+                            (([&]() -> Prelude::sig<t1284> {
+                                return signal<t1284>(nothing<t1284>());
                             })())
                         :
-                            (([&]() -> Prelude::sig<t739> {
+                            (([&]() -> Prelude::sig<t1284> {
                                 return s;
                             })()));
                     })())
                 :
                     (true ? 
-                        (([&]() -> Prelude::sig<t739> {
-                            return signal<t739>(nothing<t739>());
+                        (([&]() -> Prelude::sig<t1284> {
+                            return signal<t1284>(nothing<t1284>());
                         })())
                     :
-                        juniper::quit<Prelude::sig<t739>>()));
+                        juniper::quit<Prelude::sig<t1284>>()));
             })());
         })());
     }
 }
 
 namespace Signal {
-    template<typename t746>
-    Prelude::sig<t746> merge(Prelude::sig<t746> sigA, Prelude::sig<t746> sigB) {
-        return (([&]() -> Prelude::sig<t746> {
-            using a = t746;
-            return (([&]() -> Prelude::sig<t746> {
-                Prelude::sig<t746> guid81 = sigA;
-                return (((bool) (((bool) ((guid81).id() == ((uint8_t) 0))) && ((bool) (((bool) (((guid81).signal()).id() == ((uint8_t) 0))) && true)))) ? 
-                    (([&]() -> Prelude::sig<t746> {
+    template<typename t1364>
+    Prelude::sig<t1364> merge(Prelude::sig<t1364> sigA, Prelude::sig<t1364> sigB) {
+        return (([&]() -> Prelude::sig<t1364> {
+            using a = t1364;
+            return (([&]() -> Prelude::sig<t1364> {
+                Prelude::sig<t1364> guid94 = sigA;
+                return (((bool) (((bool) ((guid94).id() == ((uint8_t) 0))) && ((bool) (((bool) (((guid94).signal()).id() == ((uint8_t) 0))) && true)))) ? 
+                    (([&]() -> Prelude::sig<t1364> {
                         return sigA;
                     })())
                 :
                     (true ? 
-                        (([&]() -> Prelude::sig<t746> {
+                        (([&]() -> Prelude::sig<t1364> {
                             return sigB;
                         })())
                     :
-                        juniper::quit<Prelude::sig<t746>>()));
+                        juniper::quit<Prelude::sig<t1364>>()));
             })());
         })());
     }
 }
 
 namespace Signal {
-    template<typename t750, int c77>
-    Prelude::sig<t750> mergeMany(juniper::records::recordt_0<juniper::array<Prelude::sig<t750>, c77>, uint32_t> sigs) {
-        return (([&]() -> Prelude::sig<t750> {
-            using a = t750;
-            constexpr int32_t n = c77;
-            return (([&]() -> Prelude::sig<t750> {
-                Prelude::maybe<t750> guid82 = List::foldl<Prelude::maybe<t750>, void, Prelude::sig<t750>, c77>(juniper::function<void, Prelude::maybe<t750>(Prelude::sig<t750>,Prelude::maybe<t750>)>([](Prelude::sig<t750> sig, Prelude::maybe<t750> accum) -> Prelude::maybe<t750> { 
-                    return (([&]() -> Prelude::maybe<t750> {
-                        Prelude::maybe<t750> guid83 = accum;
-                        return (((bool) (((bool) ((guid83).id() == ((uint8_t) 1))) && true)) ? 
-                            (([&]() -> Prelude::maybe<t750> {
-                                return (([&]() -> Prelude::maybe<t750> {
-                                    Prelude::sig<t750> guid84 = sig;
-                                    if (!(((bool) (((bool) ((guid84).id() == ((uint8_t) 0))) && true)))) {
+    template<typename t1400, int c151>
+    Prelude::sig<t1400> mergeMany(juniper::records::recordt_0<juniper::array<Prelude::sig<t1400>, c151>, uint32_t> sigs) {
+        return (([&]() -> Prelude::sig<t1400> {
+            using a = t1400;
+            constexpr int32_t n = c151;
+            return (([&]() -> Prelude::sig<t1400> {
+                Prelude::maybe<t1400> guid95 = List::fold<Prelude::maybe<t1400>, void, Prelude::sig<t1400>, c151>(juniper::function<void, Prelude::maybe<t1400>(Prelude::sig<t1400>,Prelude::maybe<t1400>)>([](Prelude::sig<t1400> sig, Prelude::maybe<t1400> accum) -> Prelude::maybe<t1400> { 
+                    return (([&]() -> Prelude::maybe<t1400> {
+                        Prelude::maybe<t1400> guid96 = accum;
+                        return (((bool) (((bool) ((guid96).id() == ((uint8_t) 1))) && true)) ? 
+                            (([&]() -> Prelude::maybe<t1400> {
+                                return (([&]() -> Prelude::maybe<t1400> {
+                                    Prelude::sig<t1400> guid97 = sig;
+                                    if (!(((bool) (((bool) ((guid97).id() == ((uint8_t) 0))) && true)))) {
                                         juniper::quit<juniper::unit>();
                                     }
-                                    Prelude::maybe<t750> heldValue = (guid84).signal();
+                                    Prelude::maybe<t1400> heldValue = (guid97).signal();
                                     
                                     return heldValue;
                                 })());
                             })())
                         :
                             (true ? 
-                                (([&]() -> Prelude::maybe<t750> {
+                                (([&]() -> Prelude::maybe<t1400> {
                                     return accum;
                                 })())
                             :
-                                juniper::quit<Prelude::maybe<t750>>()));
+                                juniper::quit<Prelude::maybe<t1400>>()));
                     })());
-                 }), nothing<t750>(), sigs);
+                 }), nothing<t1400>(), sigs);
                 if (!(true)) {
                     juniper::quit<juniper::unit>();
                 }
-                Prelude::maybe<t750> ret = guid82;
+                Prelude::maybe<t1400> ret = guid95;
                 
-                return signal<t750>(ret);
+                return signal<t1400>(ret);
             })());
         })());
     }
 }
 
 namespace Signal {
-    template<typename t773, typename t797>
-    Prelude::sig<Prelude::either<t797, t773>> join(Prelude::sig<t797> sigA, Prelude::sig<t773> sigB) {
-        return (([&]() -> Prelude::sig<Prelude::either<t797, t773>> {
-            using a = t797;
-            using b = t773;
-            return (([&]() -> Prelude::sig<Prelude::either<t797, t773>> {
-                juniper::tuple2<Prelude::sig<t797>, Prelude::sig<t773>> guid85 = (juniper::tuple2<Prelude::sig<t797>,Prelude::sig<t773>>{sigA, sigB});
-                return (((bool) (((bool) (((guid85).e1).id() == ((uint8_t) 0))) && ((bool) (((bool) ((((guid85).e1).signal()).id() == ((uint8_t) 0))) && true)))) ? 
-                    (([&]() -> Prelude::sig<Prelude::either<t797, t773>> {
-                        t797 value = (((guid85).e1).signal()).just();
-                        return signal<Prelude::either<t797, t773>>(just<Prelude::either<t797, t773>>(left<t797, t773>(value)));
+    template<typename t1518, typename t1542>
+    Prelude::sig<Prelude::either<t1542, t1518>> join(Prelude::sig<t1542> sigA, Prelude::sig<t1518> sigB) {
+        return (([&]() -> Prelude::sig<Prelude::either<t1542, t1518>> {
+            using a = t1542;
+            using b = t1518;
+            return (([&]() -> Prelude::sig<Prelude::either<t1542, t1518>> {
+                juniper::tuple2<Prelude::sig<t1542>, Prelude::sig<t1518>> guid98 = (juniper::tuple2<Prelude::sig<t1542>,Prelude::sig<t1518>>{sigA, sigB});
+                return (((bool) (((bool) (((guid98).e1).id() == ((uint8_t) 0))) && ((bool) (((bool) ((((guid98).e1).signal()).id() == ((uint8_t) 0))) && true)))) ? 
+                    (([&]() -> Prelude::sig<Prelude::either<t1542, t1518>> {
+                        t1542 value = (((guid98).e1).signal()).just();
+                        return signal<Prelude::either<t1542, t1518>>(just<Prelude::either<t1542, t1518>>(left<t1542, t1518>(value)));
                     })())
                 :
-                    (((bool) (((bool) (((guid85).e2).id() == ((uint8_t) 0))) && ((bool) (((bool) ((((guid85).e2).signal()).id() == ((uint8_t) 0))) && true)))) ? 
-                        (([&]() -> Prelude::sig<Prelude::either<t797, t773>> {
-                            t773 value = (((guid85).e2).signal()).just();
-                            return signal<Prelude::either<t797, t773>>(just<Prelude::either<t797, t773>>(right<t797, t773>(value)));
+                    (((bool) (((bool) (((guid98).e2).id() == ((uint8_t) 0))) && ((bool) (((bool) ((((guid98).e2).signal()).id() == ((uint8_t) 0))) && true)))) ? 
+                        (([&]() -> Prelude::sig<Prelude::either<t1542, t1518>> {
+                            t1518 value = (((guid98).e2).signal()).just();
+                            return signal<Prelude::either<t1542, t1518>>(just<Prelude::either<t1542, t1518>>(right<t1542, t1518>(value)));
                         })())
                     :
                         (true ? 
-                            (([&]() -> Prelude::sig<Prelude::either<t797, t773>> {
-                                return signal<Prelude::either<t797, t773>>(nothing<Prelude::either<t797, t773>>());
+                            (([&]() -> Prelude::sig<Prelude::either<t1542, t1518>> {
+                                return signal<Prelude::either<t1542, t1518>>(nothing<Prelude::either<t1542, t1518>>());
                             })())
                         :
-                            juniper::quit<Prelude::sig<Prelude::either<t797, t773>>>())));
+                            juniper::quit<Prelude::sig<Prelude::either<t1542, t1518>>>())));
             })());
         })());
     }
 }
 
 namespace Signal {
-    template<typename t820>
-    Prelude::sig<juniper::unit> toUnit(Prelude::sig<t820> s) {
+    template<typename t1831>
+    Prelude::sig<juniper::unit> toUnit(Prelude::sig<t1831> s) {
         return (([&]() -> Prelude::sig<juniper::unit> {
-            using a = t820;
-            return map<t820, void, juniper::unit>(juniper::function<void, juniper::unit(t820)>([](t820 x) -> juniper::unit { 
+            using a = t1831;
+            return map<t1831, void, juniper::unit>(juniper::function<void, juniper::unit(t1831)>([](t1831 x) -> juniper::unit { 
                 return juniper::unit();
              }), s);
         })());
@@ -5817,171 +6412,178 @@ namespace Signal {
 }
 
 namespace Signal {
-    template<typename t827, typename t829, typename t847>
-    Prelude::sig<t847> foldP(juniper::function<t829, t847(t827, t847)> f, juniper::shared_ptr<t847> state0, Prelude::sig<t827> incoming) {
-        return (([&]() -> Prelude::sig<t847> {
-            using a = t827;
-            using state = t847;
-            return (([&]() -> Prelude::sig<t847> {
-                Prelude::sig<t827> guid86 = incoming;
-                return (((bool) (((bool) ((guid86).id() == ((uint8_t) 0))) && ((bool) (((bool) (((guid86).signal()).id() == ((uint8_t) 0))) && true)))) ? 
-                    (([&]() -> Prelude::sig<t847> {
-                        t827 val = ((guid86).signal()).just();
-                        return (([&]() -> Prelude::sig<t847> {
-                            t847 guid87 = f(val, (*((state0).get())));
+    template<typename t1865, typename t1867, typename t1883>
+    Prelude::sig<t1883> foldP(juniper::function<t1867, t1883(t1865, t1883)> f, t1883& state0, Prelude::sig<t1865> incoming) {
+        return (([&]() -> Prelude::sig<t1883> {
+            using a = t1865;
+            using state = t1883;
+            return (([&]() -> Prelude::sig<t1883> {
+                Prelude::sig<t1865> guid99 = incoming;
+                return (((bool) (((bool) ((guid99).id() == ((uint8_t) 0))) && ((bool) (((bool) (((guid99).signal()).id() == ((uint8_t) 0))) && true)))) ? 
+                    (([&]() -> Prelude::sig<t1883> {
+                        t1865 val = ((guid99).signal()).just();
+                        return (([&]() -> Prelude::sig<t1883> {
+                            t1883 guid100 = f(val, state0);
                             if (!(true)) {
                                 juniper::quit<juniper::unit>();
                             }
-                            t847 state1 = guid87;
+                            t1883 state1 = guid100;
                             
-                            (*((state0).get()) = state1);
-                            return signal<t847>(just<t847>(state1));
+                            (state0 = state1);
+                            return signal<t1883>(just<t1883>(state1));
                         })());
                     })())
                 :
                     (true ? 
-                        (([&]() -> Prelude::sig<t847> {
-                            return signal<t847>(nothing<t847>());
+                        (([&]() -> Prelude::sig<t1883> {
+                            return signal<t1883>(nothing<t1883>());
                         })())
                     :
-                        juniper::quit<Prelude::sig<t847>>()));
+                        juniper::quit<Prelude::sig<t1883>>()));
             })());
         })());
     }
 }
 
 namespace Signal {
-    template<typename t857>
-    Prelude::sig<t857> dropRepeats(juniper::shared_ptr<Prelude::maybe<t857>> maybePrevValue, Prelude::sig<t857> incoming) {
-        return (([&]() -> Prelude::sig<t857> {
-            using a = t857;
-            return filter<juniper::closures::closuret_4<juniper::shared_ptr<Prelude::maybe<t857>>>, t857>(juniper::function<juniper::closures::closuret_4<juniper::shared_ptr<Prelude::maybe<t857>>>, bool(t857)>(juniper::closures::closuret_4<juniper::shared_ptr<Prelude::maybe<t857>>>(maybePrevValue), [](juniper::closures::closuret_4<juniper::shared_ptr<Prelude::maybe<t857>>>& junclosure, t857 value) -> bool { 
-                juniper::shared_ptr<Prelude::maybe<t857>>& maybePrevValue = junclosure.maybePrevValue;
-                return (([&]() -> bool {
-                    bool guid88 = (([&]() -> bool {
-                        Prelude::maybe<t857> guid89 = (*((maybePrevValue).get()));
-                        return (((bool) (((bool) ((guid89).id() == ((uint8_t) 1))) && true)) ? 
-                            (([&]() -> bool {
-                                return false;
-                            })())
-                        :
-                            (((bool) (((bool) ((guid89).id() == ((uint8_t) 0))) && true)) ? 
-                                (([&]() -> bool {
-                                    t857 prevValue = (guid89).just();
-                                    return ((bool) (value == prevValue));
-                                })())
-                            :
-                                juniper::quit<bool>()));
-                    })());
-                    if (!(true)) {
-                        juniper::quit<juniper::unit>();
-                    }
-                    bool filtered = guid88;
-                    
-                    (([&]() -> juniper::unit {
-                        if (!(filtered)) {
-                            (([&]() -> Prelude::maybe<t857> {
-                                return (*((maybePrevValue).get()) = just<t857>(value));
+    template<typename t1960>
+    Prelude::sig<t1960> dropRepeats(Prelude::maybe<t1960>& maybePrevValue, Prelude::sig<t1960> incoming) {
+        return (([&]() -> Prelude::sig<t1960> {
+            using a = t1960;
+            return (([&]() -> Prelude::sig<t1960> {
+                Prelude::sig<t1960> guid101 = incoming;
+                return (((bool) (((bool) ((guid101).id() == ((uint8_t) 0))) && ((bool) (((bool) (((guid101).signal()).id() == ((uint8_t) 0))) && true)))) ? 
+                    (([&]() -> Prelude::sig<t1960> {
+                        t1960 value = ((guid101).signal()).just();
+                        return (([&]() -> Prelude::sig<t1960> {
+                            Prelude::sig<t1960> guid102 = (([&]() -> Prelude::sig<t1960> {
+                                Prelude::maybe<t1960> guid103 = maybePrevValue;
+                                return (((bool) (((bool) ((guid103).id() == ((uint8_t) 1))) && true)) ? 
+                                    (([&]() -> Prelude::sig<t1960> {
+                                        return incoming;
+                                    })())
+                                :
+                                    (((bool) (((bool) ((guid103).id() == ((uint8_t) 0))) && true)) ? 
+                                        (([&]() -> Prelude::sig<t1960> {
+                                            t1960 prevValue = (guid103).just();
+                                            return (((bool) (value == prevValue)) ? 
+                                                signal<t1960>(nothing<t1960>())
+                                            :
+                                                incoming);
+                                        })())
+                                    :
+                                        juniper::quit<Prelude::sig<t1960>>()));
                             })());
-                        }
-                        return {};
-                    })());
-                    return filtered;
-                })());
-             }), incoming);
+                            if (!(true)) {
+                                juniper::quit<juniper::unit>();
+                            }
+                            Prelude::sig<t1960> ret = guid102;
+                            
+                            (maybePrevValue = just<t1960>(value));
+                            return ret;
+                        })());
+                    })())
+                :
+                    (true ? 
+                        (([&]() -> Prelude::sig<t1960> {
+                            return incoming;
+                        })())
+                    :
+                        juniper::quit<Prelude::sig<t1960>>()));
+            })());
         })());
     }
 }
 
 namespace Signal {
-    template<typename t875>
-    Prelude::sig<t875> latch(juniper::shared_ptr<t875> prevValue, Prelude::sig<t875> incoming) {
-        return (([&]() -> Prelude::sig<t875> {
-            using a = t875;
-            return (([&]() -> Prelude::sig<t875> {
-                Prelude::sig<t875> guid90 = incoming;
-                return (((bool) (((bool) ((guid90).id() == ((uint8_t) 0))) && ((bool) (((bool) (((guid90).signal()).id() == ((uint8_t) 0))) && true)))) ? 
-                    (([&]() -> Prelude::sig<t875> {
-                        t875 val = ((guid90).signal()).just();
-                        return (([&]() -> Prelude::sig<t875> {
-                            (*((prevValue).get()) = val);
+    template<typename t2059>
+    Prelude::sig<t2059> latch(t2059& prevValue, Prelude::sig<t2059> incoming) {
+        return (([&]() -> Prelude::sig<t2059> {
+            using a = t2059;
+            return (([&]() -> Prelude::sig<t2059> {
+                Prelude::sig<t2059> guid104 = incoming;
+                return (((bool) (((bool) ((guid104).id() == ((uint8_t) 0))) && ((bool) (((bool) (((guid104).signal()).id() == ((uint8_t) 0))) && true)))) ? 
+                    (([&]() -> Prelude::sig<t2059> {
+                        t2059 val = ((guid104).signal()).just();
+                        return (([&]() -> Prelude::sig<t2059> {
+                            (prevValue = val);
                             return incoming;
                         })());
                     })())
                 :
                     (true ? 
-                        (([&]() -> Prelude::sig<t875> {
-                            return signal<t875>(just<t875>((*((prevValue).get()))));
+                        (([&]() -> Prelude::sig<t2059> {
+                            return signal<t2059>(just<t2059>(prevValue));
                         })())
                     :
-                        juniper::quit<Prelude::sig<t875>>()));
+                        juniper::quit<Prelude::sig<t2059>>()));
             })());
         })());
     }
 }
 
 namespace Signal {
-    template<typename t888, typename t889, typename t892, typename t901>
-    Prelude::sig<t888> map2(juniper::function<t889, t888(t892, t901)> f, juniper::shared_ptr<juniper::tuple2<t892, t901>> state, Prelude::sig<t892> incomingA, Prelude::sig<t901> incomingB) {
-        return (([&]() -> Prelude::sig<t888> {
-            using a = t892;
-            using b = t901;
-            using c = t888;
-            return (([&]() -> Prelude::sig<t888> {
-                t892 guid91 = (([&]() -> t892 {
-                    Prelude::sig<t892> guid92 = incomingA;
-                    return (((bool) (((bool) ((guid92).id() == ((uint8_t) 0))) && ((bool) (((bool) (((guid92).signal()).id() == ((uint8_t) 0))) && true)))) ? 
-                        (([&]() -> t892 {
-                            t892 val1 = ((guid92).signal()).just();
+    template<typename t2119, typename t2120, typename t2123, typename t2131>
+    Prelude::sig<t2119> map2(juniper::function<t2120, t2119(t2123, t2131)> f, juniper::tuple2<t2123, t2131>& state, Prelude::sig<t2123> incomingA, Prelude::sig<t2131> incomingB) {
+        return (([&]() -> Prelude::sig<t2119> {
+            using a = t2123;
+            using b = t2131;
+            using c = t2119;
+            return (([&]() -> Prelude::sig<t2119> {
+                t2123 guid105 = (([&]() -> t2123 {
+                    Prelude::sig<t2123> guid106 = incomingA;
+                    return (((bool) (((bool) ((guid106).id() == ((uint8_t) 0))) && ((bool) (((bool) (((guid106).signal()).id() == ((uint8_t) 0))) && true)))) ? 
+                        (([&]() -> t2123 {
+                            t2123 val1 = ((guid106).signal()).just();
                             return val1;
                         })())
                     :
                         (true ? 
-                            (([&]() -> t892 {
-                                return fst<t892, t901>((*((state).get())));
+                            (([&]() -> t2123 {
+                                return fst<t2123, t2131>(state);
                             })())
                         :
-                            juniper::quit<t892>()));
+                            juniper::quit<t2123>()));
                 })());
                 if (!(true)) {
                     juniper::quit<juniper::unit>();
                 }
-                t892 valA = guid91;
+                t2123 valA = guid105;
                 
-                t901 guid93 = (([&]() -> t901 {
-                    Prelude::sig<t901> guid94 = incomingB;
-                    return (((bool) (((bool) ((guid94).id() == ((uint8_t) 0))) && ((bool) (((bool) (((guid94).signal()).id() == ((uint8_t) 0))) && true)))) ? 
-                        (([&]() -> t901 {
-                            t901 val2 = ((guid94).signal()).just();
+                t2131 guid107 = (([&]() -> t2131 {
+                    Prelude::sig<t2131> guid108 = incomingB;
+                    return (((bool) (((bool) ((guid108).id() == ((uint8_t) 0))) && ((bool) (((bool) (((guid108).signal()).id() == ((uint8_t) 0))) && true)))) ? 
+                        (([&]() -> t2131 {
+                            t2131 val2 = ((guid108).signal()).just();
                             return val2;
                         })())
                     :
                         (true ? 
-                            (([&]() -> t901 {
-                                return snd<t892, t901>((*((state).get())));
+                            (([&]() -> t2131 {
+                                return snd<t2123, t2131>(state);
                             })())
                         :
-                            juniper::quit<t901>()));
+                            juniper::quit<t2131>()));
                 })());
                 if (!(true)) {
                     juniper::quit<juniper::unit>();
                 }
-                t901 valB = guid93;
+                t2131 valB = guid107;
                 
-                (*((state).get()) = (juniper::tuple2<t892,t901>{valA, valB}));
-                return (([&]() -> Prelude::sig<t888> {
-                    juniper::tuple2<Prelude::sig<t892>, Prelude::sig<t901>> guid95 = (juniper::tuple2<Prelude::sig<t892>,Prelude::sig<t901>>{incomingA, incomingB});
-                    return (((bool) (((bool) (((guid95).e2).id() == ((uint8_t) 0))) && ((bool) (((bool) ((((guid95).e2).signal()).id() == ((uint8_t) 1))) && ((bool) (((bool) (((guid95).e1).id() == ((uint8_t) 0))) && ((bool) (((bool) ((((guid95).e1).signal()).id() == ((uint8_t) 1))) && true)))))))) ? 
-                        (([&]() -> Prelude::sig<t888> {
-                            return signal<t888>(nothing<t888>());
+                (state = (juniper::tuple2<t2123,t2131>{valA, valB}));
+                return (([&]() -> Prelude::sig<t2119> {
+                    juniper::tuple2<Prelude::sig<t2123>, Prelude::sig<t2131>> guid109 = (juniper::tuple2<Prelude::sig<t2123>,Prelude::sig<t2131>>{incomingA, incomingB});
+                    return (((bool) (((bool) (((guid109).e2).id() == ((uint8_t) 0))) && ((bool) (((bool) ((((guid109).e2).signal()).id() == ((uint8_t) 1))) && ((bool) (((bool) (((guid109).e1).id() == ((uint8_t) 0))) && ((bool) (((bool) ((((guid109).e1).signal()).id() == ((uint8_t) 1))) && true)))))))) ? 
+                        (([&]() -> Prelude::sig<t2119> {
+                            return signal<t2119>(nothing<t2119>());
                         })())
                     :
                         (true ? 
-                            (([&]() -> Prelude::sig<t888> {
-                                return signal<t888>(just<t888>(f(valA, valB)));
+                            (([&]() -> Prelude::sig<t2119> {
+                                return signal<t2119>(just<t2119>(f(valA, valB)));
                             })())
                         :
-                            juniper::quit<Prelude::sig<t888>>()));
+                            juniper::quit<Prelude::sig<t2119>>()));
                 })());
             })());
         })());
@@ -5989,122 +6591,122 @@ namespace Signal {
 }
 
 namespace Signal {
-    template<typename t933, int c79>
-    Prelude::sig<juniper::records::recordt_0<juniper::array<t933, c79>, uint32_t>> record(juniper::shared_ptr<juniper::records::recordt_0<juniper::array<t933, c79>, uint32_t>> pastValues, Prelude::sig<t933> incoming) {
-        return (([&]() -> Prelude::sig<juniper::records::recordt_0<juniper::array<t933, c79>, uint32_t>> {
-            using a = t933;
-            constexpr int32_t n = c79;
-            return foldP<t933, void, juniper::records::recordt_0<juniper::array<t933, c79>, uint32_t>>(List::pushOffFront<t933, c79>, pastValues, incoming);
+    template<typename t2273, int c153>
+    Prelude::sig<juniper::records::recordt_0<juniper::array<t2273, c153>, uint32_t>> record(juniper::records::recordt_0<juniper::array<t2273, c153>, uint32_t>& pastValues, Prelude::sig<t2273> incoming) {
+        return (([&]() -> Prelude::sig<juniper::records::recordt_0<juniper::array<t2273, c153>, uint32_t>> {
+            using a = t2273;
+            constexpr int32_t n = c153;
+            return foldP<t2273, void, juniper::records::recordt_0<juniper::array<t2273, c153>, uint32_t>>(List::prependPure<t2273, c153>, pastValues, incoming);
         })());
     }
 }
 
 namespace Signal {
-    template<typename t944>
-    Prelude::sig<t944> constant(t944 val) {
-        return (([&]() -> Prelude::sig<t944> {
-            using a = t944;
-            return signal<t944>(just<t944>(val));
+    template<typename t2311>
+    Prelude::sig<t2311> constant(t2311 val) {
+        return (([&]() -> Prelude::sig<t2311> {
+            using a = t2311;
+            return signal<t2311>(just<t2311>(val));
         })());
     }
 }
 
 namespace Signal {
-    template<typename t954>
-    Prelude::sig<Prelude::maybe<t954>> meta(Prelude::sig<t954> sigA) {
-        return (([&]() -> Prelude::sig<Prelude::maybe<t954>> {
-            using a = t954;
-            return (([&]() -> Prelude::sig<Prelude::maybe<t954>> {
-                Prelude::sig<t954> guid96 = sigA;
-                if (!(((bool) (((bool) ((guid96).id() == ((uint8_t) 0))) && true)))) {
+    template<typename t2346>
+    Prelude::sig<Prelude::maybe<t2346>> meta(Prelude::sig<t2346> sigA) {
+        return (([&]() -> Prelude::sig<Prelude::maybe<t2346>> {
+            using a = t2346;
+            return (([&]() -> Prelude::sig<Prelude::maybe<t2346>> {
+                Prelude::sig<t2346> guid110 = sigA;
+                if (!(((bool) (((bool) ((guid110).id() == ((uint8_t) 0))) && true)))) {
                     juniper::quit<juniper::unit>();
                 }
-                Prelude::maybe<t954> val = (guid96).signal();
+                Prelude::maybe<t2346> val = (guid110).signal();
                 
-                return constant<Prelude::maybe<t954>>(val);
+                return constant<Prelude::maybe<t2346>>(val);
             })());
         })());
     }
 }
 
 namespace Signal {
-    template<typename t971>
-    Prelude::sig<t971> unmeta(Prelude::sig<Prelude::maybe<t971>> sigA) {
-        return (([&]() -> Prelude::sig<t971> {
-            using a = t971;
-            return (([&]() -> Prelude::sig<t971> {
-                Prelude::sig<Prelude::maybe<t971>> guid97 = sigA;
-                return (((bool) (((bool) ((guid97).id() == ((uint8_t) 0))) && ((bool) (((bool) (((guid97).signal()).id() == ((uint8_t) 0))) && ((bool) (((bool) ((((guid97).signal()).just()).id() == ((uint8_t) 0))) && true)))))) ? 
-                    (([&]() -> Prelude::sig<t971> {
-                        t971 val = (((guid97).signal()).just()).just();
-                        return constant<t971>(val);
+    template<typename t2413>
+    Prelude::sig<t2413> unmeta(Prelude::sig<Prelude::maybe<t2413>> sigA) {
+        return (([&]() -> Prelude::sig<t2413> {
+            using a = t2413;
+            return (([&]() -> Prelude::sig<t2413> {
+                Prelude::sig<Prelude::maybe<t2413>> guid111 = sigA;
+                return (((bool) (((bool) ((guid111).id() == ((uint8_t) 0))) && ((bool) (((bool) (((guid111).signal()).id() == ((uint8_t) 0))) && ((bool) (((bool) ((((guid111).signal()).just()).id() == ((uint8_t) 0))) && true)))))) ? 
+                    (([&]() -> Prelude::sig<t2413> {
+                        t2413 val = (((guid111).signal()).just()).just();
+                        return constant<t2413>(val);
                     })())
                 :
                     (true ? 
-                        (([&]() -> Prelude::sig<t971> {
-                            return signal<t971>(nothing<t971>());
+                        (([&]() -> Prelude::sig<t2413> {
+                            return signal<t2413>(nothing<t2413>());
                         })())
                     :
-                        juniper::quit<Prelude::sig<t971>>()));
+                        juniper::quit<Prelude::sig<t2413>>()));
             })());
         })());
     }
 }
 
 namespace Signal {
-    template<typename t984, typename t985>
-    Prelude::sig<juniper::tuple2<t984, t985>> zip(juniper::shared_ptr<juniper::tuple2<t984, t985>> state, Prelude::sig<t984> sigA, Prelude::sig<t985> sigB) {
-        return (([&]() -> Prelude::sig<juniper::tuple2<t984, t985>> {
-            using a = t984;
-            using b = t985;
-            return map2<juniper::tuple2<t984, t985>, void, t984, t985>(juniper::function<void, juniper::tuple2<t984, t985>(t984,t985)>([](t984 valA, t985 valB) -> juniper::tuple2<t984, t985> { 
-                return (juniper::tuple2<t984,t985>{valA, valB});
+    template<typename t2489, typename t2490>
+    Prelude::sig<juniper::tuple2<t2489, t2490>> zip(juniper::tuple2<t2489, t2490>& state, Prelude::sig<t2489> sigA, Prelude::sig<t2490> sigB) {
+        return (([&]() -> Prelude::sig<juniper::tuple2<t2489, t2490>> {
+            using a = t2489;
+            using b = t2490;
+            return map2<juniper::tuple2<t2489, t2490>, void, t2489, t2490>(juniper::function<void, juniper::tuple2<t2489, t2490>(t2489,t2490)>([](t2489 valA, t2490 valB) -> juniper::tuple2<t2489, t2490> { 
+                return (juniper::tuple2<t2489,t2490>{valA, valB});
              }), state, sigA, sigB);
         })());
     }
 }
 
 namespace Signal {
-    template<typename t1016, typename t1023>
-    juniper::tuple2<Prelude::sig<t1016>, Prelude::sig<t1023>> unzip(Prelude::sig<juniper::tuple2<t1016, t1023>> incoming) {
-        return (([&]() -> juniper::tuple2<Prelude::sig<t1016>, Prelude::sig<t1023>> {
-            using a = t1016;
-            using b = t1023;
-            return (([&]() -> juniper::tuple2<Prelude::sig<t1016>, Prelude::sig<t1023>> {
-                Prelude::sig<juniper::tuple2<t1016, t1023>> guid98 = incoming;
-                return (((bool) (((bool) ((guid98).id() == ((uint8_t) 0))) && ((bool) (((bool) (((guid98).signal()).id() == ((uint8_t) 0))) && true)))) ? 
-                    (([&]() -> juniper::tuple2<Prelude::sig<t1016>, Prelude::sig<t1023>> {
-                        t1023 y = (((guid98).signal()).just()).e2;
-                        t1016 x = (((guid98).signal()).just()).e1;
-                        return (juniper::tuple2<Prelude::sig<t1016>,Prelude::sig<t1023>>{signal<t1016>(just<t1016>(x)), signal<t1023>(just<t1023>(y))});
+    template<typename t2560, typename t2567>
+    juniper::tuple2<Prelude::sig<t2560>, Prelude::sig<t2567>> unzip(Prelude::sig<juniper::tuple2<t2560, t2567>> incoming) {
+        return (([&]() -> juniper::tuple2<Prelude::sig<t2560>, Prelude::sig<t2567>> {
+            using a = t2560;
+            using b = t2567;
+            return (([&]() -> juniper::tuple2<Prelude::sig<t2560>, Prelude::sig<t2567>> {
+                Prelude::sig<juniper::tuple2<t2560, t2567>> guid112 = incoming;
+                return (((bool) (((bool) ((guid112).id() == ((uint8_t) 0))) && ((bool) (((bool) (((guid112).signal()).id() == ((uint8_t) 0))) && true)))) ? 
+                    (([&]() -> juniper::tuple2<Prelude::sig<t2560>, Prelude::sig<t2567>> {
+                        t2567 y = (((guid112).signal()).just()).e2;
+                        t2560 x = (((guid112).signal()).just()).e1;
+                        return (juniper::tuple2<Prelude::sig<t2560>,Prelude::sig<t2567>>{signal<t2560>(just<t2560>(x)), signal<t2567>(just<t2567>(y))});
                     })())
                 :
                     (true ? 
-                        (([&]() -> juniper::tuple2<Prelude::sig<t1016>, Prelude::sig<t1023>> {
-                            return (juniper::tuple2<Prelude::sig<t1016>,Prelude::sig<t1023>>{signal<t1016>(nothing<t1016>()), signal<t1023>(nothing<t1023>())});
+                        (([&]() -> juniper::tuple2<Prelude::sig<t2560>, Prelude::sig<t2567>> {
+                            return (juniper::tuple2<Prelude::sig<t2560>,Prelude::sig<t2567>>{signal<t2560>(nothing<t2560>()), signal<t2567>(nothing<t2567>())});
                         })())
                     :
-                        juniper::quit<juniper::tuple2<Prelude::sig<t1016>, Prelude::sig<t1023>>>()));
+                        juniper::quit<juniper::tuple2<Prelude::sig<t2560>, Prelude::sig<t2567>>>()));
             })());
         })());
     }
 }
 
 namespace Signal {
-    template<typename t1030, typename t1031>
-    Prelude::sig<t1030> toggle(t1030 val1, t1030 val2, juniper::shared_ptr<t1030> state, Prelude::sig<t1031> incoming) {
-        return (([&]() -> Prelude::sig<t1030> {
-            using a = t1030;
-            using b = t1031;
-            return foldP<t1031, juniper::closures::closuret_5<t1030, t1030>, t1030>(juniper::function<juniper::closures::closuret_5<t1030, t1030>, t1030(t1031,t1030)>(juniper::closures::closuret_5<t1030, t1030>(val1, val2), [](juniper::closures::closuret_5<t1030, t1030>& junclosure, t1031 event, t1030 prevVal) -> t1030 { 
-                t1030& val1 = junclosure.val1;
-                t1030& val2 = junclosure.val2;
+    template<typename t2694, typename t2695>
+    Prelude::sig<t2694> toggle(t2694 val1, t2694 val2, t2694& state, Prelude::sig<t2695> incoming) {
+        return (([&]() -> Prelude::sig<t2694> {
+            using a = t2694;
+            using b = t2695;
+            return foldP<t2695, juniper::closures::closuret_4<t2694, t2694>, t2694>(juniper::function<juniper::closures::closuret_4<t2694, t2694>, t2694(t2695,t2694)>(juniper::closures::closuret_4<t2694, t2694>(val1, val2), [](juniper::closures::closuret_4<t2694, t2694>& junclosure, t2695 event, t2694 prevVal) -> t2694 { 
+                t2694& val1 = junclosure.val1;
+                t2694& val2 = junclosure.val2;
                 return (((bool) (prevVal == val1)) ? 
-                    (([&]() -> t1030 {
+                    (([&]() -> t2694 {
                         return val2;
                     })())
                 :
-                    (([&]() -> t1030 {
+                    (([&]() -> t2694 {
                         return val1;
                     })()));
              }), state, incoming);
@@ -6115,13 +6717,13 @@ namespace Signal {
 namespace Io {
     Io::pinState toggle(Io::pinState p) {
         return (([&]() -> Io::pinState {
-            Io::pinState guid99 = p;
-            return (((bool) (((bool) ((guid99).id() == ((uint8_t) 0))) && true)) ? 
+            Io::pinState guid113 = p;
+            return (((bool) (((bool) ((guid113).id() == ((uint8_t) 0))) && true)) ? 
                 (([&]() -> Io::pinState {
                     return low();
                 })())
             :
-                (((bool) (((bool) ((guid99).id() == ((uint8_t) 1))) && true)) ? 
+                (((bool) (((bool) ((guid113).id() == ((uint8_t) 1))) && true)) ? 
                     (([&]() -> Io::pinState {
                         return high();
                     })())
@@ -6141,10 +6743,10 @@ namespace Io {
 }
 
 namespace Io {
-    template<int c81>
-    juniper::unit printCharList(juniper::records::recordt_0<juniper::array<uint8_t, c81>, uint32_t> cl) {
+    template<int c155>
+    juniper::unit printCharList(juniper::records::recordt_0<juniper::array<uint8_t, c155>, uint32_t> cl) {
         return (([&]() -> juniper::unit {
-            constexpr int32_t n = c81;
+            constexpr int32_t n = c155;
             return (([&]() -> juniper::unit {
                 Serial.print((char *) &cl.data[0]);
                 return {};
@@ -6172,31 +6774,31 @@ namespace Io {
 }
 
 namespace Io {
-    template<typename t1059>
-    t1059 baseToInt(Io::base b) {
-        return (([&]() -> t1059 {
-            Io::base guid100 = b;
-            return (((bool) (((bool) ((guid100).id() == ((uint8_t) 0))) && true)) ? 
-                (([&]() -> t1059 {
-                    return ((t1059) 2);
+    template<typename t2750>
+    t2750 baseToInt(Io::base b) {
+        return (([&]() -> t2750 {
+            Io::base guid114 = b;
+            return (((bool) (((bool) ((guid114).id() == ((uint8_t) 0))) && true)) ? 
+                (([&]() -> t2750 {
+                    return ((t2750) 2);
                 })())
             :
-                (((bool) (((bool) ((guid100).id() == ((uint8_t) 1))) && true)) ? 
-                    (([&]() -> t1059 {
-                        return ((t1059) 8);
+                (((bool) (((bool) ((guid114).id() == ((uint8_t) 1))) && true)) ? 
+                    (([&]() -> t2750 {
+                        return ((t2750) 8);
                     })())
                 :
-                    (((bool) (((bool) ((guid100).id() == ((uint8_t) 2))) && true)) ? 
-                        (([&]() -> t1059 {
-                            return ((t1059) 10);
+                    (((bool) (((bool) ((guid114).id() == ((uint8_t) 2))) && true)) ? 
+                        (([&]() -> t2750 {
+                            return ((t2750) 10);
                         })())
                     :
-                        (((bool) (((bool) ((guid100).id() == ((uint8_t) 3))) && true)) ? 
-                            (([&]() -> t1059 {
-                                return ((t1059) 16);
+                        (((bool) (((bool) ((guid114).id() == ((uint8_t) 3))) && true)) ? 
+                            (([&]() -> t2750 {
+                                return ((t2750) 16);
                             })())
                         :
-                            juniper::quit<t1059>()))));
+                            juniper::quit<t2750>()))));
         })());
     }
 }
@@ -6204,11 +6806,11 @@ namespace Io {
 namespace Io {
     juniper::unit printIntBase(int32_t n, Io::base b) {
         return (([&]() -> juniper::unit {
-            int32_t guid101 = baseToInt<int32_t>(b);
+            int32_t guid115 = baseToInt<int32_t>(b);
             if (!(true)) {
                 juniper::quit<juniper::unit>();
             }
-            int32_t bint = guid101;
+            int32_t bint = guid115;
             
             return (([&]() -> juniper::unit {
                 Serial.print(n, bint);
@@ -6239,13 +6841,13 @@ namespace Io {
 namespace Io {
     uint8_t pinStateToInt(Io::pinState value) {
         return (([&]() -> uint8_t {
-            Io::pinState guid102 = value;
-            return (((bool) (((bool) ((guid102).id() == ((uint8_t) 1))) && true)) ? 
+            Io::pinState guid116 = value;
+            return (((bool) (((bool) ((guid116).id() == ((uint8_t) 1))) && true)) ? 
                 (([&]() -> uint8_t {
                     return ((uint8_t) 0);
                 })())
             :
-                (((bool) (((bool) ((guid102).id() == ((uint8_t) 0))) && true)) ? 
+                (((bool) (((bool) ((guid116).id() == ((uint8_t) 0))) && true)) ? 
                     (([&]() -> uint8_t {
                         return ((uint8_t) 1);
                     })())
@@ -6267,11 +6869,11 @@ namespace Io {
 namespace Io {
     juniper::unit digWrite(uint16_t pin, Io::pinState value) {
         return (([&]() -> juniper::unit {
-            uint8_t guid103 = pinStateToInt(value);
+            uint8_t guid117 = pinStateToInt(value);
             if (!(true)) {
                 juniper::quit<juniper::unit>();
             }
-            uint8_t intVal = guid103;
+            uint8_t intVal = guid117;
             
             return (([&]() -> juniper::unit {
                 digitalWrite(pin, intVal);
@@ -6303,7 +6905,7 @@ namespace Io {
 
 namespace Io {
     juniper::unit digOut(uint16_t pin, Prelude::sig<Io::pinState> sig) {
-        return Signal::sink<Io::pinState, juniper::closures::closuret_6<uint16_t>>(juniper::function<juniper::closures::closuret_6<uint16_t>, juniper::unit(Io::pinState)>(juniper::closures::closuret_6<uint16_t>(pin), [](juniper::closures::closuret_6<uint16_t>& junclosure, Io::pinState value) -> juniper::unit { 
+        return Signal::sink<Io::pinState, juniper::closures::closuret_5<uint16_t>>(juniper::function<juniper::closures::closuret_5<uint16_t>, juniper::unit(Io::pinState)>(juniper::closures::closuret_5<uint16_t>(pin), [](juniper::closures::closuret_5<uint16_t>& junclosure, Io::pinState value) -> juniper::unit { 
             uint16_t& pin = junclosure.pin;
             return digWrite(pin, value);
          }), sig);
@@ -6341,7 +6943,7 @@ namespace Io {
 
 namespace Io {
     juniper::unit anaOut(uint16_t pin, Prelude::sig<uint8_t> sig) {
-        return Signal::sink<uint8_t, juniper::closures::closuret_6<uint16_t>>(juniper::function<juniper::closures::closuret_6<uint16_t>, juniper::unit(uint8_t)>(juniper::closures::closuret_6<uint16_t>(pin), [](juniper::closures::closuret_6<uint16_t>& junclosure, uint8_t value) -> juniper::unit { 
+        return Signal::sink<uint8_t, juniper::closures::closuret_5<uint16_t>>(juniper::function<juniper::closures::closuret_5<uint16_t>, juniper::unit(uint8_t)>(juniper::closures::closuret_5<uint16_t>(pin), [](juniper::closures::closuret_5<uint16_t>& junclosure, uint8_t value) -> juniper::unit { 
             uint16_t& pin = junclosure.pin;
             return anaWrite(pin, value);
          }), sig);
@@ -6351,18 +6953,18 @@ namespace Io {
 namespace Io {
     uint8_t pinModeToInt(Io::mode m) {
         return (([&]() -> uint8_t {
-            Io::mode guid104 = m;
-            return (((bool) (((bool) ((guid104).id() == ((uint8_t) 0))) && true)) ? 
+            Io::mode guid118 = m;
+            return (((bool) (((bool) ((guid118).id() == ((uint8_t) 0))) && true)) ? 
                 (([&]() -> uint8_t {
                     return ((uint8_t) 0);
                 })())
             :
-                (((bool) (((bool) ((guid104).id() == ((uint8_t) 1))) && true)) ? 
+                (((bool) (((bool) ((guid118).id() == ((uint8_t) 1))) && true)) ? 
                     (([&]() -> uint8_t {
                         return ((uint8_t) 1);
                     })())
                 :
-                    (((bool) (((bool) ((guid104).id() == ((uint8_t) 2))) && true)) ? 
+                    (((bool) (((bool) ((guid118).id() == ((uint8_t) 2))) && true)) ? 
                         (([&]() -> uint8_t {
                             return ((uint8_t) 2);
                         })())
@@ -6375,18 +6977,18 @@ namespace Io {
 namespace Io {
     Io::mode intToPinMode(uint8_t m) {
         return (([&]() -> Io::mode {
-            uint8_t guid105 = m;
-            return (((bool) (((bool) (guid105 == ((int32_t) 0))) && true)) ? 
+            uint8_t guid119 = m;
+            return (((bool) (((bool) (guid119 == ((uint8_t) 0))) && true)) ? 
                 (([&]() -> Io::mode {
                     return input();
                 })())
             :
-                (((bool) (((bool) (guid105 == ((int32_t) 1))) && true)) ? 
+                (((bool) (((bool) (guid119 == ((uint8_t) 1))) && true)) ? 
                     (([&]() -> Io::mode {
                         return output();
                     })())
                 :
-                    (((bool) (((bool) (guid105 == ((int32_t) 2))) && true)) ? 
+                    (((bool) (((bool) (guid119 == ((uint8_t) 2))) && true)) ? 
                         (([&]() -> Io::mode {
                             return inputPullup();
                         })())
@@ -6399,11 +7001,11 @@ namespace Io {
 namespace Io {
     juniper::unit setPinMode(uint16_t pin, Io::mode m) {
         return (([&]() -> juniper::unit {
-            uint8_t guid106 = pinModeToInt(m);
+            uint8_t guid120 = pinModeToInt(m);
             if (!(true)) {
                 juniper::quit<juniper::unit>();
             }
-            uint8_t m2 = guid106;
+            uint8_t m2 = guid120;
             
             return (([&]() -> juniper::unit {
                 pinMode(pin, m2);
@@ -6414,155 +7016,188 @@ namespace Io {
 }
 
 namespace Io {
-    Prelude::sig<juniper::unit> risingEdge(Prelude::sig<Io::pinState> sig, juniper::shared_ptr<Io::pinState> prevState) {
-        return Signal::toUnit<Io::pinState>(Signal::filter<juniper::closures::closuret_7<juniper::shared_ptr<Io::pinState>>, Io::pinState>(juniper::function<juniper::closures::closuret_7<juniper::shared_ptr<Io::pinState>>, bool(Io::pinState)>(juniper::closures::closuret_7<juniper::shared_ptr<Io::pinState>>(prevState), [](juniper::closures::closuret_7<juniper::shared_ptr<Io::pinState>>& junclosure, Io::pinState currState) -> bool { 
-            juniper::shared_ptr<Io::pinState>& prevState = junclosure.prevState;
-            return (([&]() -> bool {
-                bool guid107 = (([&]() -> bool {
-                    juniper::tuple2<Io::pinState, Io::pinState> guid108 = (juniper::tuple2<Io::pinState,Io::pinState>{currState, (*((prevState).get()))});
-                    return (((bool) (((bool) (((guid108).e2).id() == ((uint8_t) 1))) && ((bool) (((bool) (((guid108).e1).id() == ((uint8_t) 0))) && true)))) ? 
-                        (([&]() -> bool {
-                            return false;
-                        })())
-                    :
-                        (true ? 
-                            (([&]() -> bool {
-                                return true;
-                            })())
-                        :
-                            juniper::quit<bool>()));
-                })());
-                if (!(true)) {
-                    juniper::quit<juniper::unit>();
-                }
-                bool ret = guid107;
-                
-                (*((prevState).get()) = currState);
-                return ret;
-            })());
-         }), sig));
-    }
-}
-
-namespace Io {
-    Prelude::sig<juniper::unit> fallingEdge(Prelude::sig<Io::pinState> sig, juniper::shared_ptr<Io::pinState> prevState) {
-        return Signal::toUnit<Io::pinState>(Signal::filter<juniper::closures::closuret_7<juniper::shared_ptr<Io::pinState>>, Io::pinState>(juniper::function<juniper::closures::closuret_7<juniper::shared_ptr<Io::pinState>>, bool(Io::pinState)>(juniper::closures::closuret_7<juniper::shared_ptr<Io::pinState>>(prevState), [](juniper::closures::closuret_7<juniper::shared_ptr<Io::pinState>>& junclosure, Io::pinState currState) -> bool { 
-            juniper::shared_ptr<Io::pinState>& prevState = junclosure.prevState;
-            return (([&]() -> bool {
-                bool guid109 = (([&]() -> bool {
-                    juniper::tuple2<Io::pinState, Io::pinState> guid110 = (juniper::tuple2<Io::pinState,Io::pinState>{currState, (*((prevState).get()))});
-                    return (((bool) (((bool) (((guid110).e2).id() == ((uint8_t) 0))) && ((bool) (((bool) (((guid110).e1).id() == ((uint8_t) 1))) && true)))) ? 
-                        (([&]() -> bool {
-                            return false;
-                        })())
-                    :
-                        (true ? 
-                            (([&]() -> bool {
-                                return true;
-                            })())
-                        :
-                            juniper::quit<bool>()));
-                })());
-                if (!(true)) {
-                    juniper::quit<juniper::unit>();
-                }
-                bool ret = guid109;
-                
-                (*((prevState).get()) = currState);
-                return ret;
-            })());
-         }), sig));
-    }
-}
-
-namespace Io {
-    Prelude::sig<Io::pinState> edge(Prelude::sig<Io::pinState> sig, juniper::shared_ptr<Io::pinState> prevState) {
-        return Signal::filter<juniper::closures::closuret_7<juniper::shared_ptr<Io::pinState>>, Io::pinState>(juniper::function<juniper::closures::closuret_7<juniper::shared_ptr<Io::pinState>>, bool(Io::pinState)>(juniper::closures::closuret_7<juniper::shared_ptr<Io::pinState>>(prevState), [](juniper::closures::closuret_7<juniper::shared_ptr<Io::pinState>>& junclosure, Io::pinState currState) -> bool { 
-            juniper::shared_ptr<Io::pinState>& prevState = junclosure.prevState;
-            return (([&]() -> bool {
-                bool guid111 = (([&]() -> bool {
-                    juniper::tuple2<Io::pinState, Io::pinState> guid112 = (juniper::tuple2<Io::pinState,Io::pinState>{currState, (*((prevState).get()))});
-                    return (((bool) (((bool) (((guid112).e2).id() == ((uint8_t) 1))) && ((bool) (((bool) (((guid112).e1).id() == ((uint8_t) 0))) && true)))) ? 
-                        (([&]() -> bool {
-                            return false;
-                        })())
-                    :
-                        (((bool) (((bool) (((guid112).e2).id() == ((uint8_t) 0))) && ((bool) (((bool) (((guid112).e1).id() == ((uint8_t) 1))) && true)))) ? 
-                            (([&]() -> bool {
-                                return false;
-                            })())
-                        :
-                            (true ? 
-                                (([&]() -> bool {
-                                    return true;
+    Prelude::sig<juniper::unit> risingEdge(Prelude::sig<Io::pinState> sig, Io::pinState& prevState) {
+        return (([&]() -> Prelude::sig<juniper::unit> {
+            Prelude::sig<Io::pinState> guid121 = sig;
+            return (((bool) (((bool) ((guid121).id() == ((uint8_t) 0))) && ((bool) (((bool) (((guid121).signal()).id() == ((uint8_t) 0))) && true)))) ? 
+                (([&]() -> Prelude::sig<juniper::unit> {
+                    Io::pinState currState = ((guid121).signal()).just();
+                    return (([&]() -> Prelude::sig<juniper::unit> {
+                        Prelude::maybe<juniper::unit> guid122 = (([&]() -> Prelude::maybe<juniper::unit> {
+                            juniper::tuple2<Io::pinState, Io::pinState> guid123 = (juniper::tuple2<Io::pinState,Io::pinState>{currState, prevState});
+                            return (((bool) (((bool) (((guid123).e2).id() == ((uint8_t) 1))) && ((bool) (((bool) (((guid123).e1).id() == ((uint8_t) 0))) && true)))) ? 
+                                (([&]() -> Prelude::maybe<juniper::unit> {
+                                    return just<juniper::unit>(juniper::unit());
                                 })())
                             :
-                                juniper::quit<bool>())));
-                })());
-                if (!(true)) {
-                    juniper::quit<juniper::unit>();
-                }
-                bool ret = guid111;
-                
-                (*((prevState).get()) = currState);
-                return ret;
-            })());
-         }), sig);
+                                (true ? 
+                                    (([&]() -> Prelude::maybe<juniper::unit> {
+                                        return nothing<juniper::unit>();
+                                    })())
+                                :
+                                    juniper::quit<Prelude::maybe<juniper::unit>>()));
+                        })());
+                        if (!(true)) {
+                            juniper::quit<juniper::unit>();
+                        }
+                        Prelude::maybe<juniper::unit> ret = guid122;
+                        
+                        (prevState = currState);
+                        return signal<juniper::unit>(ret);
+                    })());
+                })())
+            :
+                (true ? 
+                    (([&]() -> Prelude::sig<juniper::unit> {
+                        return signal<juniper::unit>(nothing<juniper::unit>());
+                    })())
+                :
+                    juniper::quit<Prelude::sig<juniper::unit>>()));
+        })());
+    }
+}
+
+namespace Io {
+    Prelude::sig<juniper::unit> fallingEdge(Prelude::sig<Io::pinState> sig, Io::pinState& prevState) {
+        return (([&]() -> Prelude::sig<juniper::unit> {
+            Prelude::sig<Io::pinState> guid124 = sig;
+            return (((bool) (((bool) ((guid124).id() == ((uint8_t) 0))) && ((bool) (((bool) (((guid124).signal()).id() == ((uint8_t) 0))) && true)))) ? 
+                (([&]() -> Prelude::sig<juniper::unit> {
+                    Io::pinState currState = ((guid124).signal()).just();
+                    return (([&]() -> Prelude::sig<juniper::unit> {
+                        Prelude::maybe<juniper::unit> guid125 = (([&]() -> Prelude::maybe<juniper::unit> {
+                            juniper::tuple2<Io::pinState, Io::pinState> guid126 = (juniper::tuple2<Io::pinState,Io::pinState>{currState, prevState});
+                            return (((bool) (((bool) (((guid126).e2).id() == ((uint8_t) 0))) && ((bool) (((bool) (((guid126).e1).id() == ((uint8_t) 1))) && true)))) ? 
+                                (([&]() -> Prelude::maybe<juniper::unit> {
+                                    return just<juniper::unit>(juniper::unit());
+                                })())
+                            :
+                                (true ? 
+                                    (([&]() -> Prelude::maybe<juniper::unit> {
+                                        return nothing<juniper::unit>();
+                                    })())
+                                :
+                                    juniper::quit<Prelude::maybe<juniper::unit>>()));
+                        })());
+                        if (!(true)) {
+                            juniper::quit<juniper::unit>();
+                        }
+                        Prelude::maybe<juniper::unit> ret = guid125;
+                        
+                        (prevState = currState);
+                        return signal<juniper::unit>(ret);
+                    })());
+                })())
+            :
+                (true ? 
+                    (([&]() -> Prelude::sig<juniper::unit> {
+                        return signal<juniper::unit>(nothing<juniper::unit>());
+                    })())
+                :
+                    juniper::quit<Prelude::sig<juniper::unit>>()));
+        })());
+    }
+}
+
+namespace Io {
+    Prelude::sig<juniper::unit> edge(Prelude::sig<Io::pinState> sig, Io::pinState& prevState) {
+        return (([&]() -> Prelude::sig<juniper::unit> {
+            Prelude::sig<Io::pinState> guid127 = sig;
+            return (((bool) (((bool) ((guid127).id() == ((uint8_t) 0))) && ((bool) (((bool) (((guid127).signal()).id() == ((uint8_t) 0))) && true)))) ? 
+                (([&]() -> Prelude::sig<juniper::unit> {
+                    Io::pinState currState = ((guid127).signal()).just();
+                    return (([&]() -> Prelude::sig<juniper::unit> {
+                        Prelude::maybe<juniper::unit> guid128 = (([&]() -> Prelude::maybe<juniper::unit> {
+                            juniper::tuple2<Io::pinState, Io::pinState> guid129 = (juniper::tuple2<Io::pinState,Io::pinState>{currState, prevState});
+                            return (((bool) (((bool) (((guid129).e2).id() == ((uint8_t) 0))) && ((bool) (((bool) (((guid129).e1).id() == ((uint8_t) 1))) && true)))) ? 
+                                (([&]() -> Prelude::maybe<juniper::unit> {
+                                    return just<juniper::unit>(juniper::unit());
+                                })())
+                            :
+                                (((bool) (((bool) (((guid129).e2).id() == ((uint8_t) 1))) && ((bool) (((bool) (((guid129).e1).id() == ((uint8_t) 0))) && true)))) ? 
+                                    (([&]() -> Prelude::maybe<juniper::unit> {
+                                        return just<juniper::unit>(juniper::unit());
+                                    })())
+                                :
+                                    (true ? 
+                                        (([&]() -> Prelude::maybe<juniper::unit> {
+                                            return nothing<juniper::unit>();
+                                        })())
+                                    :
+                                        juniper::quit<Prelude::maybe<juniper::unit>>())));
+                        })());
+                        if (!(true)) {
+                            juniper::quit<juniper::unit>();
+                        }
+                        Prelude::maybe<juniper::unit> ret = guid128;
+                        
+                        (prevState = currState);
+                        return signal<juniper::unit>(ret);
+                    })());
+                })())
+            :
+                (true ? 
+                    (([&]() -> Prelude::sig<juniper::unit> {
+                        return signal<juniper::unit>(nothing<juniper::unit>());
+                    })())
+                :
+                    juniper::quit<Prelude::sig<juniper::unit>>()));
+        })());
     }
 }
 
 namespace Maybe {
-    template<typename t1191, typename t1193, typename t1202>
-    Prelude::maybe<t1202> map(juniper::function<t1193, t1202(t1191)> f, Prelude::maybe<t1191> maybeVal) {
-        return (([&]() -> Prelude::maybe<t1202> {
-            using a = t1191;
-            using b = t1202;
-            return (([&]() -> Prelude::maybe<t1202> {
-                Prelude::maybe<t1191> guid113 = maybeVal;
-                return (((bool) (((bool) ((guid113).id() == ((uint8_t) 0))) && true)) ? 
-                    (([&]() -> Prelude::maybe<t1202> {
-                        t1191 val = (guid113).just();
-                        return just<t1202>(f(val));
+    template<typename t3204, typename t3206, typename t3215>
+    Prelude::maybe<t3215> map(juniper::function<t3206, t3215(t3204)> f, Prelude::maybe<t3204> maybeVal) {
+        return (([&]() -> Prelude::maybe<t3215> {
+            using a = t3204;
+            using b = t3215;
+            return (([&]() -> Prelude::maybe<t3215> {
+                Prelude::maybe<t3204> guid130 = maybeVal;
+                return (((bool) (((bool) ((guid130).id() == ((uint8_t) 0))) && true)) ? 
+                    (([&]() -> Prelude::maybe<t3215> {
+                        t3204 val = (guid130).just();
+                        return just<t3215>(f(val));
                     })())
                 :
                     (true ? 
-                        (([&]() -> Prelude::maybe<t1202> {
-                            return nothing<t1202>();
+                        (([&]() -> Prelude::maybe<t3215> {
+                            return nothing<t3215>();
                         })())
                     :
-                        juniper::quit<Prelude::maybe<t1202>>()));
+                        juniper::quit<Prelude::maybe<t3215>>()));
             })());
         })());
     }
 }
 
 namespace Maybe {
-    template<typename t1206>
-    t1206 get(Prelude::maybe<t1206> maybeVal) {
-        return (([&]() -> t1206 {
-            using a = t1206;
-            return (([&]() -> t1206 {
-                Prelude::maybe<t1206> guid114 = maybeVal;
-                return (((bool) (((bool) ((guid114).id() == ((uint8_t) 0))) && true)) ? 
-                    (([&]() -> t1206 {
-                        t1206 val = (guid114).just();
+    template<typename t3245>
+    t3245 get(Prelude::maybe<t3245> maybeVal) {
+        return (([&]() -> t3245 {
+            using a = t3245;
+            return (([&]() -> t3245 {
+                Prelude::maybe<t3245> guid131 = maybeVal;
+                return (((bool) (((bool) ((guid131).id() == ((uint8_t) 0))) && true)) ? 
+                    (([&]() -> t3245 {
+                        t3245 val = (guid131).just();
                         return val;
                     })())
                 :
-                    juniper::quit<t1206>());
+                    juniper::quit<t3245>());
             })());
         })());
     }
 }
 
 namespace Maybe {
-    template<typename t1209>
-    bool isJust(Prelude::maybe<t1209> maybeVal) {
+    template<typename t3254>
+    bool isJust(Prelude::maybe<t3254> maybeVal) {
         return (([&]() -> bool {
-            using a = t1209;
+            using a = t3254;
             return (([&]() -> bool {
-                Prelude::maybe<t1209> guid115 = maybeVal;
-                return (((bool) (((bool) ((guid115).id() == ((uint8_t) 0))) && true)) ? 
+                Prelude::maybe<t3254> guid132 = maybeVal;
+                return (((bool) (((bool) ((guid132).id() == ((uint8_t) 0))) && true)) ? 
                     (([&]() -> bool {
                         return true;
                     })())
@@ -6579,23 +7214,23 @@ namespace Maybe {
 }
 
 namespace Maybe {
-    template<typename t1212>
-    bool isNothing(Prelude::maybe<t1212> maybeVal) {
+    template<typename t3265>
+    bool isNothing(Prelude::maybe<t3265> maybeVal) {
         return (([&]() -> bool {
-            using a = t1212;
-            return !(isJust<t1212>(maybeVal));
+            using a = t3265;
+            return !(isJust<t3265>(maybeVal));
         })());
     }
 }
 
 namespace Maybe {
-    template<typename t1218>
-    uint8_t count(Prelude::maybe<t1218> maybeVal) {
+    template<typename t3279>
+    uint8_t count(Prelude::maybe<t3279> maybeVal) {
         return (([&]() -> uint8_t {
-            using a = t1218;
+            using a = t3279;
             return (([&]() -> uint8_t {
-                Prelude::maybe<t1218> guid116 = maybeVal;
-                return (((bool) (((bool) ((guid116).id() == ((uint8_t) 0))) && true)) ? 
+                Prelude::maybe<t3279> guid133 = maybeVal;
+                return (((bool) (((bool) ((guid133).id() == ((uint8_t) 0))) && true)) ? 
                     (([&]() -> uint8_t {
                         return ((uint8_t) 1);
                     })())
@@ -6612,57 +7247,46 @@ namespace Maybe {
 }
 
 namespace Maybe {
-    template<typename t1224, typename t1225, typename t1226>
-    t1224 foldl(juniper::function<t1226, t1224(t1225, t1224)> f, t1224 initState, Prelude::maybe<t1225> maybeVal) {
-        return (([&]() -> t1224 {
-            using state = t1224;
-            using t = t1225;
-            return (([&]() -> t1224 {
-                Prelude::maybe<t1225> guid117 = maybeVal;
-                return (((bool) (((bool) ((guid117).id() == ((uint8_t) 0))) && true)) ? 
-                    (([&]() -> t1224 {
-                        t1225 val = (guid117).just();
+    template<typename t3293, typename t3294, typename t3295>
+    t3293 fold(juniper::function<t3295, t3293(t3294, t3293)> f, t3293 initState, Prelude::maybe<t3294> maybeVal) {
+        return (([&]() -> t3293 {
+            using state = t3293;
+            using t = t3294;
+            return (([&]() -> t3293 {
+                Prelude::maybe<t3294> guid134 = maybeVal;
+                return (((bool) (((bool) ((guid134).id() == ((uint8_t) 0))) && true)) ? 
+                    (([&]() -> t3293 {
+                        t3294 val = (guid134).just();
                         return f(val, initState);
                     })())
                 :
                     (true ? 
-                        (([&]() -> t1224 {
+                        (([&]() -> t3293 {
                             return initState;
                         })())
                     :
-                        juniper::quit<t1224>()));
+                        juniper::quit<t3293>()));
             })());
         })());
     }
 }
 
 namespace Maybe {
-    template<typename t1234, typename t1235, typename t1236>
-    t1234 fodlr(juniper::function<t1236, t1234(t1235, t1234)> f, t1234 initState, Prelude::maybe<t1235> maybeVal) {
-        return (([&]() -> t1234 {
-            using state = t1234;
-            using t = t1235;
-            return foldl<t1234, t1235, t1236>(f, initState, maybeVal);
-        })());
-    }
-}
-
-namespace Maybe {
-    template<typename t1247, typename t1248>
-    juniper::unit iter(juniper::function<t1248, juniper::unit(t1247)> f, Prelude::maybe<t1247> maybeVal) {
+    template<typename t3311, typename t3312>
+    juniper::unit iter(juniper::function<t3312, juniper::unit(t3311)> f, Prelude::maybe<t3311> maybeVal) {
         return (([&]() -> juniper::unit {
-            using a = t1247;
+            using a = t3311;
             return (([&]() -> juniper::unit {
-                Prelude::maybe<t1247> guid118 = maybeVal;
-                return (((bool) (((bool) ((guid118).id() == ((uint8_t) 0))) && true)) ? 
+                Prelude::maybe<t3311> guid135 = maybeVal;
+                return (((bool) (((bool) ((guid135).id() == ((uint8_t) 0))) && true)) ? 
                     (([&]() -> juniper::unit {
-                        t1247 val = (guid118).just();
+                        t3311 val = (guid135).just();
                         return f(val);
                     })())
                 :
                     (true ? 
                         (([&]() -> juniper::unit {
-                            Prelude::maybe<t1247> nothing = guid118;
+                            Prelude::maybe<t3311> nothing = guid135;
                             return juniper::unit();
                         })())
                     :
@@ -6684,11 +7308,11 @@ namespace Time {
 namespace Time {
     uint32_t now() {
         return (([&]() -> uint32_t {
-            uint32_t guid119 = ((uint32_t) 0);
+            uint32_t guid136 = ((uint32_t) 0);
             if (!(true)) {
                 juniper::quit<juniper::unit>();
             }
-            uint32_t ret = guid119;
+            uint32_t ret = guid136;
             
             (([&]() -> juniper::unit {
                 ret = millis();
@@ -6700,25 +7324,23 @@ namespace Time {
 }
 
 namespace Time {
-    juniper::shared_ptr<juniper::records::recordt_1<uint32_t>> state() {
-        return (juniper::shared_ptr<juniper::records::recordt_1<uint32_t>>((([&]() -> juniper::records::recordt_1<uint32_t>{
-            juniper::records::recordt_1<uint32_t> guid120;
-            guid120.lastPulse = ((uint32_t) 0);
-            return guid120;
-        })())));
-    }
+    juniper::records::recordt_1<uint32_t> state = (([]() -> juniper::records::recordt_1<uint32_t>{
+        juniper::records::recordt_1<uint32_t> guid137;
+        guid137.lastPulse = ((uint32_t) 0);
+        return guid137;
+    })());
 }
 
 namespace Time {
-    Prelude::sig<uint32_t> every(uint32_t interval, juniper::shared_ptr<juniper::records::recordt_1<uint32_t>> state) {
+    Prelude::sig<uint32_t> every(uint32_t interval, juniper::records::recordt_1<uint32_t>& state) {
         return (([&]() -> Prelude::sig<uint32_t> {
-            uint32_t guid121 = now();
+            uint32_t guid138 = now();
             if (!(true)) {
                 juniper::quit<juniper::unit>();
             }
-            uint32_t t = guid121;
+            uint32_t t = guid138;
             
-            uint32_t guid122 = (((bool) (interval == ((uint32_t) 0))) ? 
+            uint32_t guid139 = (((bool) (interval == ((uint32_t) 0))) ? 
                 (([&]() -> uint32_t {
                     return t;
                 })())
@@ -6729,15 +7351,15 @@ namespace Time {
             if (!(true)) {
                 juniper::quit<juniper::unit>();
             }
-            uint32_t lastWindow = guid122;
+            uint32_t lastWindow = guid139;
             
-            return (((bool) (((state).get())->lastPulse >= lastWindow)) ? 
+            return (((bool) ((state).lastPulse >= lastWindow)) ? 
                 (([&]() -> Prelude::sig<uint32_t> {
                     return signal<uint32_t>(nothing<uint32_t>());
                 })())
             :
                 (([&]() -> Prelude::sig<uint32_t> {
-                    (((state).get())->lastPulse = t);
+                    ((state).lastPulse = t);
                     return signal<uint32_t>(just<uint32_t>(t));
                 })()));
         })());
@@ -6745,33 +7367,33 @@ namespace Time {
 }
 
 namespace Math {
-    double pi = 3.141592653589793238462643383279502884197169399375105820974;
+    double pi = ((double) 3.141592653589793238462643383279502884197169399375105820974);
 }
 
 namespace Math {
-    double e = 2.718281828459045235360287471352662497757247093699959574966;
+    double e = ((double) 2.718281828459045235360287471352662497757247093699959574966);
 }
 
 namespace Math {
     double degToRad(double degrees) {
-        return ((double) (degrees * 0.017453292519943295769236907684886));
+        return ((double) (degrees * ((double) 0.017453292519943295769236907684886)));
     }
 }
 
 namespace Math {
     double radToDeg(double radians) {
-        return ((double) (radians * 57.295779513082320876798154814105));
+        return ((double) (radians * ((double) 57.295779513082320876798154814105)));
     }
 }
 
 namespace Math {
     double acos_(double x) {
         return (([&]() -> double {
-            double guid123 = 0.0;
+            double guid140 = ((double) 0.0);
             if (!(true)) {
                 juniper::quit<juniper::unit>();
             }
-            double ret = guid123;
+            double ret = guid140;
             
             (([&]() -> juniper::unit {
                 ret = acos(x);
@@ -6785,11 +7407,11 @@ namespace Math {
 namespace Math {
     double asin_(double x) {
         return (([&]() -> double {
-            double guid124 = 0.0;
+            double guid141 = ((double) 0.0);
             if (!(true)) {
                 juniper::quit<juniper::unit>();
             }
-            double ret = guid124;
+            double ret = guid141;
             
             (([&]() -> juniper::unit {
                 ret = asin(x);
@@ -6803,11 +7425,11 @@ namespace Math {
 namespace Math {
     double atan_(double x) {
         return (([&]() -> double {
-            double guid125 = 0.0;
+            double guid142 = ((double) 0.0);
             if (!(true)) {
                 juniper::quit<juniper::unit>();
             }
-            double ret = guid125;
+            double ret = guid142;
             
             (([&]() -> juniper::unit {
                 ret = atan(x);
@@ -6821,11 +7443,11 @@ namespace Math {
 namespace Math {
     double atan2_(double y, double x) {
         return (([&]() -> double {
-            double guid126 = 0.0;
+            double guid143 = ((double) 0.0);
             if (!(true)) {
                 juniper::quit<juniper::unit>();
             }
-            double ret = guid126;
+            double ret = guid143;
             
             (([&]() -> juniper::unit {
                 ret = atan2(y, x);
@@ -6839,11 +7461,11 @@ namespace Math {
 namespace Math {
     double cos_(double x) {
         return (([&]() -> double {
-            double guid127 = 0.0;
+            double guid144 = ((double) 0.0);
             if (!(true)) {
                 juniper::quit<juniper::unit>();
             }
-            double ret = guid127;
+            double ret = guid144;
             
             (([&]() -> juniper::unit {
                 ret = cos(x);
@@ -6857,11 +7479,11 @@ namespace Math {
 namespace Math {
     double cosh_(double x) {
         return (([&]() -> double {
-            double guid128 = 0.0;
+            double guid145 = ((double) 0.0);
             if (!(true)) {
                 juniper::quit<juniper::unit>();
             }
-            double ret = guid128;
+            double ret = guid145;
             
             (([&]() -> juniper::unit {
                 ret = cosh(x);
@@ -6875,11 +7497,11 @@ namespace Math {
 namespace Math {
     double sin_(double x) {
         return (([&]() -> double {
-            double guid129 = 0.0;
+            double guid146 = ((double) 0.0);
             if (!(true)) {
                 juniper::quit<juniper::unit>();
             }
-            double ret = guid129;
+            double ret = guid146;
             
             (([&]() -> juniper::unit {
                 ret = sin(x);
@@ -6893,11 +7515,11 @@ namespace Math {
 namespace Math {
     double sinh_(double x) {
         return (([&]() -> double {
-            double guid130 = 0.0;
+            double guid147 = ((double) 0.0);
             if (!(true)) {
                 juniper::quit<juniper::unit>();
             }
-            double ret = guid130;
+            double ret = guid147;
             
             (([&]() -> juniper::unit {
                 ret = sinh(x);
@@ -6917,11 +7539,11 @@ namespace Math {
 namespace Math {
     double tanh_(double x) {
         return (([&]() -> double {
-            double guid131 = 0.0;
+            double guid148 = ((double) 0.0);
             if (!(true)) {
                 juniper::quit<juniper::unit>();
             }
-            double ret = guid131;
+            double ret = guid148;
             
             (([&]() -> juniper::unit {
                 ret = tanh(x);
@@ -6935,11 +7557,11 @@ namespace Math {
 namespace Math {
     double exp_(double x) {
         return (([&]() -> double {
-            double guid132 = 0.0;
+            double guid149 = ((double) 0.0);
             if (!(true)) {
                 juniper::quit<juniper::unit>();
             }
-            double ret = guid132;
+            double ret = guid149;
             
             (([&]() -> juniper::unit {
                 ret = exp(x);
@@ -6953,17 +7575,17 @@ namespace Math {
 namespace Math {
     juniper::tuple2<double, int32_t> frexp_(double x) {
         return (([&]() -> juniper::tuple2<double, int32_t> {
-            double guid133 = 0.0;
+            double guid150 = ((double) 0.0);
             if (!(true)) {
                 juniper::quit<juniper::unit>();
             }
-            double ret = guid133;
+            double ret = guid150;
             
-            int32_t guid134 = ((int32_t) 0);
+            int32_t guid151 = ((int32_t) 0);
             if (!(true)) {
                 juniper::quit<juniper::unit>();
             }
-            int32_t exponent = guid134;
+            int32_t exponent = guid151;
             
             (([&]() -> juniper::unit {
                 int exponent2;
@@ -6979,11 +7601,11 @@ namespace Math {
 namespace Math {
     double ldexp_(double x, int16_t exponent) {
         return (([&]() -> double {
-            double guid135 = 0.0;
+            double guid152 = ((double) 0.0);
             if (!(true)) {
                 juniper::quit<juniper::unit>();
             }
-            double ret = guid135;
+            double ret = guid152;
             
             (([&]() -> juniper::unit {
                 ret = ldexp(x, exponent);
@@ -6997,11 +7619,11 @@ namespace Math {
 namespace Math {
     double log_(double x) {
         return (([&]() -> double {
-            double guid136 = 0.0;
+            double guid153 = ((double) 0.0);
             if (!(true)) {
                 juniper::quit<juniper::unit>();
             }
-            double ret = guid136;
+            double ret = guid153;
             
             (([&]() -> juniper::unit {
                 ret = log(x);
@@ -7015,11 +7637,11 @@ namespace Math {
 namespace Math {
     double log10_(double x) {
         return (([&]() -> double {
-            double guid137 = 0.0;
+            double guid154 = ((double) 0.0);
             if (!(true)) {
                 juniper::quit<juniper::unit>();
             }
-            double ret = guid137;
+            double ret = guid154;
             
             (([&]() -> juniper::unit {
                 ret = log10(x);
@@ -7033,17 +7655,17 @@ namespace Math {
 namespace Math {
     juniper::tuple2<double, double> modf_(double x) {
         return (([&]() -> juniper::tuple2<double, double> {
-            double guid138 = 0.0;
+            double guid155 = ((double) 0.0);
             if (!(true)) {
                 juniper::quit<juniper::unit>();
             }
-            double ret = guid138;
+            double ret = guid155;
             
-            double guid139 = 0.0;
+            double guid156 = ((double) 0.0);
             if (!(true)) {
                 juniper::quit<juniper::unit>();
             }
-            double integer = guid139;
+            double integer = guid156;
             
             (([&]() -> juniper::unit {
                 ret = modf(x, &integer);
@@ -7057,11 +7679,7 @@ namespace Math {
 namespace Math {
     double pow_(double x, double y) {
         return (([&]() -> double {
-            double guid140 = 0.0;
-            if (!(true)) {
-                juniper::quit<juniper::unit>();
-            }
-            double ret = guid140;
+            double ret;
             
             (([&]() -> juniper::unit {
                 ret = pow(x, y);
@@ -7075,11 +7693,7 @@ namespace Math {
 namespace Math {
     double sqrt_(double x) {
         return (([&]() -> double {
-            double guid141 = 0.0;
-            if (!(true)) {
-                juniper::quit<juniper::unit>();
-            }
-            double ret = guid141;
+            double ret;
             
             (([&]() -> juniper::unit {
                 ret = sqrt(x);
@@ -7093,11 +7707,7 @@ namespace Math {
 namespace Math {
     double ceil_(double x) {
         return (([&]() -> double {
-            double guid142 = 0.0;
-            if (!(true)) {
-                juniper::quit<juniper::unit>();
-            }
-            double ret = guid142;
+            double ret;
             
             (([&]() -> juniper::unit {
                 ret = ceil(x);
@@ -7111,11 +7721,7 @@ namespace Math {
 namespace Math {
     double fabs_(double x) {
         return (([&]() -> double {
-            double guid143 = 0.0;
-            if (!(true)) {
-                juniper::quit<juniper::unit>();
-            }
-            double ret = guid143;
+            double ret;
             
             (([&]() -> juniper::unit {
                 ret = fabs(x);
@@ -7127,13 +7733,28 @@ namespace Math {
 }
 
 namespace Math {
+    template<typename t3456>
+    t3456 abs_(t3456 x) {
+        return (([&]() -> t3456 {
+            using t = t3456;
+            return (([&]() -> t3456 {
+                return (((bool) (x < ((t3456) 0))) ? 
+                    (([&]() -> t3456 {
+                        return -(x);
+                    })())
+                :
+                    (([&]() -> t3456 {
+                        return x;
+                    })()));
+            })());
+        })());
+    }
+}
+
+namespace Math {
     double floor_(double x) {
         return (([&]() -> double {
-            double guid144 = 0.0;
-            if (!(true)) {
-                juniper::quit<juniper::unit>();
-            }
-            double ret = guid144;
+            double ret;
             
             (([&]() -> juniper::unit {
                 ret = floor(x);
@@ -7147,11 +7768,11 @@ namespace Math {
 namespace Math {
     double fmod_(double x, double y) {
         return (([&]() -> double {
-            double guid145 = 0.0;
+            double guid157 = ((double) 0.0);
             if (!(true)) {
                 juniper::quit<juniper::unit>();
             }
-            double ret = guid145;
+            double ret = guid157;
             
             (([&]() -> juniper::unit {
                 ret = fmod(x, y);
@@ -7164,21 +7785,21 @@ namespace Math {
 
 namespace Math {
     double round_(double x) {
-        return floor_(((double) (x + 0.5)));
+        return floor_(((double) (x + ((double) 0.5))));
     }
 }
 
 namespace Math {
-    template<typename t1315>
-    t1315 max_(t1315 x, t1315 y) {
-        return (([&]() -> t1315 {
-            using a = t1315;
+    template<typename t3467>
+    t3467 max_(t3467 x, t3467 y) {
+        return (([&]() -> t3467 {
+            using a = t3467;
             return (((bool) (x > y)) ? 
-                (([&]() -> t1315 {
+                (([&]() -> t3467 {
                     return x;
                 })())
             :
-                (([&]() -> t1315 {
+                (([&]() -> t3467 {
                     return y;
                 })()));
         })());
@@ -7186,27 +7807,31 @@ namespace Math {
 }
 
 namespace Math {
-    double mapRange(double x, double a1, double a2, double b1, double b2) {
-        return ((double) (b1 + ((double) (((double) (((double) (x - a1)) * ((double) (b2 - b1)))) / ((double) (a2 - a1))))));
+    template<typename t3469>
+    t3469 mapRange(t3469 x, t3469 a1, t3469 a2, t3469 b1, t3469 b2) {
+        return (([&]() -> t3469 {
+            using t = t3469;
+            return ((t3469) (b1 + ((t3469) (((t3469) (((t3469) (x - a1)) * ((t3469) (b2 - b1)))) / ((t3469) (a2 - a1))))));
+        })());
     }
 }
 
 namespace Math {
-    template<typename t1318>
-    t1318 clamp(t1318 x, t1318 min, t1318 max) {
-        return (([&]() -> t1318 {
-            using a = t1318;
+    template<typename t3471>
+    t3471 clamp(t3471 x, t3471 min, t3471 max) {
+        return (([&]() -> t3471 {
+            using a = t3471;
             return (((bool) (min > x)) ? 
-                (([&]() -> t1318 {
+                (([&]() -> t3471 {
                     return min;
                 })())
             :
                 (((bool) (x > max)) ? 
-                    (([&]() -> t1318 {
+                    (([&]() -> t3471 {
                         return max;
                     })())
                 :
-                    (([&]() -> t1318 {
+                    (([&]() -> t3471 {
                         return x;
                     })())));
         })());
@@ -7214,16 +7839,16 @@ namespace Math {
 }
 
 namespace Math {
-    template<typename t1323>
-    int8_t sign(t1323 n) {
+    template<typename t3476>
+    int8_t sign(t3476 n) {
         return (([&]() -> int8_t {
-            using a = t1323;
-            return (((bool) (n == ((t1323) 0))) ? 
+            using a = t3476;
+            return (((bool) (n == ((t3476) 0))) ? 
                 (([&]() -> int8_t {
                     return ((int8_t) 0);
                 })())
             :
-                (((bool) (n > ((t1323) 0))) ? 
+                (((bool) (n > ((t3476) 0))) ? 
                     (([&]() -> int8_t {
                         return ((int8_t) 1);
                     })())
@@ -7236,72 +7861,70 @@ namespace Math {
 }
 
 namespace Button {
-    juniper::shared_ptr<juniper::records::recordt_2<Io::pinState, uint32_t, Io::pinState>> state() {
-        return (juniper::shared_ptr<juniper::records::recordt_2<Io::pinState, uint32_t, Io::pinState>>((([&]() -> juniper::records::recordt_2<Io::pinState, uint32_t, Io::pinState>{
-            juniper::records::recordt_2<Io::pinState, uint32_t, Io::pinState> guid146;
-            guid146.actualState = Io::low();
-            guid146.lastState = Io::low();
-            guid146.lastDebounceTime = ((uint32_t) 0);
-            return guid146;
-        })())));
-    }
+    juniper::records::recordt_2<Io::pinState, uint32_t, Io::pinState> state = (([]() -> juniper::records::recordt_2<Io::pinState, uint32_t, Io::pinState>{
+        juniper::records::recordt_2<Io::pinState, uint32_t, Io::pinState> guid158;
+        guid158.actualState = Io::low();
+        guid158.lastState = Io::low();
+        guid158.lastDebounceTime = ((uint32_t) 0);
+        return guid158;
+    })());
 }
 
 namespace Button {
-    Prelude::sig<Io::pinState> debounceDelay(Prelude::sig<Io::pinState> incoming, uint16_t delay, juniper::shared_ptr<juniper::records::recordt_2<Io::pinState, uint32_t, Io::pinState>> buttonState) {
-        return Signal::map<Io::pinState, juniper::closures::closuret_8<juniper::shared_ptr<juniper::records::recordt_2<Io::pinState, uint32_t, Io::pinState>>, uint16_t>, Io::pinState>(juniper::function<juniper::closures::closuret_8<juniper::shared_ptr<juniper::records::recordt_2<Io::pinState, uint32_t, Io::pinState>>, uint16_t>, Io::pinState(Io::pinState)>(juniper::closures::closuret_8<juniper::shared_ptr<juniper::records::recordt_2<Io::pinState, uint32_t, Io::pinState>>, uint16_t>(buttonState, delay), [](juniper::closures::closuret_8<juniper::shared_ptr<juniper::records::recordt_2<Io::pinState, uint32_t, Io::pinState>>, uint16_t>& junclosure, Io::pinState currentState) -> Io::pinState { 
-            juniper::shared_ptr<juniper::records::recordt_2<Io::pinState, uint32_t, Io::pinState>>& buttonState = junclosure.buttonState;
-            uint16_t& delay = junclosure.delay;
-            return (([&]() -> Io::pinState {
-                juniper::records::recordt_2<Io::pinState, uint32_t, Io::pinState> guid147 = (*((buttonState).get()));
-                if (!(true)) {
-                    juniper::quit<juniper::unit>();
-                }
-                uint32_t lastDebounceTime = (guid147).lastDebounceTime;
-                Io::pinState lastState = (guid147).lastState;
-                Io::pinState actualState = (guid147).actualState;
-                
-                return (((bool) (currentState != lastState)) ? 
-                    (([&]() -> Io::pinState {
-                        (*((buttonState).get()) = (([&]() -> juniper::records::recordt_2<Io::pinState, uint32_t, Io::pinState>{
-                            juniper::records::recordt_2<Io::pinState, uint32_t, Io::pinState> guid148;
-                            guid148.actualState = actualState;
-                            guid148.lastState = currentState;
-                            guid148.lastDebounceTime = Time::now();
-                            return guid148;
-                        })()));
-                        return actualState;
+    Prelude::sig<Io::pinState> debounceDelay(Prelude::sig<Io::pinState> incoming, uint16_t delay, juniper::records::recordt_2<Io::pinState, uint32_t, Io::pinState>& buttonState) {
+        return (([&]() -> Prelude::sig<Io::pinState> {
+            Prelude::sig<Io::pinState> guid159 = incoming;
+            return (((bool) (((bool) ((guid159).id() == ((uint8_t) 0))) && ((bool) (((bool) (((guid159).signal()).id() == ((uint8_t) 0))) && true)))) ? 
+                (([&]() -> Prelude::sig<Io::pinState> {
+                    Io::pinState currentState = ((guid159).signal()).just();
+                    return (([&]() -> Prelude::sig<Io::pinState> {
+                        juniper::records::recordt_2<Io::pinState, uint32_t, Io::pinState> guid160 = buttonState;
+                        if (!(true)) {
+                            juniper::quit<juniper::unit>();
+                        }
+                        uint32_t lastDebounceTime = (guid160).lastDebounceTime;
+                        Io::pinState lastState = (guid160).lastState;
+                        Io::pinState actualState = (guid160).actualState;
+                        
+                        Io::pinState guid161 = (((bool) (currentState != lastState)) ? 
+                            (([&]() -> Io::pinState {
+                                ((buttonState).lastState = currentState);
+                                ((buttonState).lastDebounceTime = Time::now());
+                                return actualState;
+                            })())
+                        :
+                            (((bool) (((bool) (currentState != actualState)) && ((bool) (((uint32_t) (Time::now() - (buttonState).lastDebounceTime)) > delay)))) ? 
+                                (([&]() -> Io::pinState {
+                                    ((buttonState).actualState = currentState);
+                                    ((buttonState).lastState = currentState);
+                                    return currentState;
+                                })())
+                            :
+                                (([&]() -> Io::pinState {
+                                    ((buttonState).lastState = currentState);
+                                    return actualState;
+                                })())));
+                        if (!(true)) {
+                            juniper::quit<juniper::unit>();
+                        }
+                        Io::pinState retState = guid161;
+                        
+                        return signal<Io::pinState>(just<Io::pinState>(retState));
+                    })());
+                })())
+            :
+                (true ? 
+                    (([&]() -> Prelude::sig<Io::pinState> {
+                        return incoming;
                     })())
                 :
-                    (((bool) (((bool) (currentState != actualState)) && ((bool) (((uint32_t) (Time::now() - ((buttonState).get())->lastDebounceTime)) > delay)))) ? 
-                        (([&]() -> Io::pinState {
-                            (*((buttonState).get()) = (([&]() -> juniper::records::recordt_2<Io::pinState, uint32_t, Io::pinState>{
-                                juniper::records::recordt_2<Io::pinState, uint32_t, Io::pinState> guid149;
-                                guid149.actualState = currentState;
-                                guid149.lastState = currentState;
-                                guid149.lastDebounceTime = lastDebounceTime;
-                                return guid149;
-                            })()));
-                            return currentState;
-                        })())
-                    :
-                        (([&]() -> Io::pinState {
-                            (*((buttonState).get()) = (([&]() -> juniper::records::recordt_2<Io::pinState, uint32_t, Io::pinState>{
-                                juniper::records::recordt_2<Io::pinState, uint32_t, Io::pinState> guid150;
-                                guid150.actualState = actualState;
-                                guid150.lastState = currentState;
-                                guid150.lastDebounceTime = lastDebounceTime;
-                                return guid150;
-                            })()));
-                            return actualState;
-                        })())));
-            })());
-         }), incoming);
+                    juniper::quit<Prelude::sig<Io::pinState>>()));
+        })());
     }
 }
 
 namespace Button {
-    Prelude::sig<Io::pinState> debounce(Prelude::sig<Io::pinState> incoming, juniper::shared_ptr<juniper::records::recordt_2<Io::pinState, uint32_t, Io::pinState>> buttonState) {
+    Prelude::sig<Io::pinState> debounce(Prelude::sig<Io::pinState> incoming, juniper::records::recordt_2<Io::pinState, uint32_t, Io::pinState>& buttonState) {
         return debounceDelay(incoming, ((uint16_t) 50), buttonState);
     }
 }
@@ -7319,151 +7942,104 @@ namespace Vector {
 }
 
 namespace Vector {
-    template<typename t1371, int c82>
-    juniper::array<t1371, c82> add(juniper::array<t1371, c82> v1, juniper::array<t1371, c82> v2) {
-        return (([&]() -> juniper::array<t1371, c82> {
-            using a = t1371;
-            constexpr int32_t n = c82;
-            return (([&]() -> juniper::array<t1371, c82> {
-                juniper::array<t1371, c82> guid151 = v1;
-                if (!(true)) {
-                    juniper::quit<juniper::unit>();
-                }
-                juniper::array<t1371, c82> result = guid151;
-                
+    template<typename t3596, int c156>
+    juniper::array<t3596, c156> add(juniper::array<t3596, c156> v1, juniper::array<t3596, c156> v2) {
+        return (([&]() -> juniper::array<t3596, c156> {
+            using a = t3596;
+            constexpr int32_t n = c156;
+            return (([&]() -> juniper::array<t3596, c156> {
                 (([&]() -> juniper::unit {
-                    int32_t guid152 = ((int32_t) 0);
-                    int32_t guid153 = n;
-                    for (int32_t i = guid152; i < guid153; i++) {
-                        (([&]() -> t1371 {
-                            return ((result)[i] += (v2)[i]);
+                    int32_t guid162 = ((int32_t) 0);
+                    int32_t guid163 = n;
+                    for (int32_t i = guid162; i < guid163; i++) {
+                        (([&]() -> t3596 {
+                            return ((v1)[i] += (v2)[i]);
                         })());
                     }
                     return {};
                 })());
-                return result;
+                return v1;
             })());
         })());
     }
 }
 
 namespace Vector {
-    template<typename t1373, int c85>
-    juniper::array<t1373, c85> zero() {
-        return (([&]() -> juniper::array<t1373, c85> {
-            using a = t1373;
-            constexpr int32_t n = c85;
-            return (juniper::array<t1373, c85>().fill(((t1373) 0)));
+    template<typename t3600, int c159>
+    juniper::array<t3600, c159> zero() {
+        return (([&]() -> juniper::array<t3600, c159> {
+            using a = t3600;
+            constexpr int32_t n = c159;
+            return array<t3600, c159>(((t3600) 0));
         })());
     }
 }
 
 namespace Vector {
-    template<typename t1379, int c86>
-    juniper::array<t1379, c86> subtract(juniper::array<t1379, c86> v1, juniper::array<t1379, c86> v2) {
-        return (([&]() -> juniper::array<t1379, c86> {
-            using a = t1379;
-            constexpr int32_t n = c86;
-            return (([&]() -> juniper::array<t1379, c86> {
-                juniper::array<t1379, c86> guid154 = v1;
-                if (!(true)) {
-                    juniper::quit<juniper::unit>();
-                }
-                juniper::array<t1379, c86> result = guid154;
-                
-                (([&]() -> juniper::unit {
-                    int32_t guid155 = ((int32_t) 0);
-                    int32_t guid156 = n;
-                    for (int32_t i = guid155; i < guid156; i++) {
-                        (([&]() -> t1379 {
-                            return ((result)[i] -= (v2)[i]);
-                        })());
-                    }
-                    return {};
-                })());
-                return result;
-            })());
-        })());
-    }
-}
-
-namespace Vector {
-    template<typename t1383, int c89>
-    juniper::array<t1383, c89> scale(t1383 scalar, juniper::array<t1383, c89> v) {
-        return (([&]() -> juniper::array<t1383, c89> {
-            using a = t1383;
-            constexpr int32_t n = c89;
-            return (([&]() -> juniper::array<t1383, c89> {
-                juniper::array<t1383, c89> guid157 = v;
-                if (!(true)) {
-                    juniper::quit<juniper::unit>();
-                }
-                juniper::array<t1383, c89> result = guid157;
-                
-                (([&]() -> juniper::unit {
-                    int32_t guid158 = ((int32_t) 0);
-                    int32_t guid159 = n;
-                    for (int32_t i = guid158; i < guid159; i++) {
-                        (([&]() -> t1383 {
-                            return ((result)[i] *= scalar);
-                        })());
-                    }
-                    return {};
-                })());
-                return result;
-            })());
-        })());
-    }
-}
-
-namespace Vector {
-    template<typename t1389, int c91>
-    t1389 dot(juniper::array<t1389, c91> v1, juniper::array<t1389, c91> v2) {
-        return (([&]() -> t1389 {
-            using a = t1389;
-            constexpr int32_t n = c91;
-            return (([&]() -> t1389 {
-                t1389 guid160 = ((t1389) 0);
-                if (!(true)) {
-                    juniper::quit<juniper::unit>();
-                }
-                t1389 sum = guid160;
-                
-                (([&]() -> juniper::unit {
-                    int32_t guid161 = ((int32_t) 0);
-                    int32_t guid162 = n;
-                    for (int32_t i = guid161; i < guid162; i++) {
-                        (([&]() -> t1389 {
-                            return (sum += ((t1389) ((v1)[i] * (v2)[i])));
-                        })());
-                    }
-                    return {};
-                })());
-                return sum;
-            })());
-        })());
-    }
-}
-
-namespace Vector {
-    template<typename t1395, int c94>
-    t1395 magnitude2(juniper::array<t1395, c94> v) {
-        return (([&]() -> t1395 {
-            using a = t1395;
-            constexpr int32_t n = c94;
-            return (([&]() -> t1395 {
-                t1395 guid163 = ((t1395) 0);
-                if (!(true)) {
-                    juniper::quit<juniper::unit>();
-                }
-                t1395 sum = guid163;
-                
+    template<typename t3608, int c161>
+    juniper::array<t3608, c161> subtract(juniper::array<t3608, c161> v1, juniper::array<t3608, c161> v2) {
+        return (([&]() -> juniper::array<t3608, c161> {
+            using a = t3608;
+            constexpr int32_t n = c161;
+            return (([&]() -> juniper::array<t3608, c161> {
                 (([&]() -> juniper::unit {
                     int32_t guid164 = ((int32_t) 0);
                     int32_t guid165 = n;
                     for (int32_t i = guid164; i < guid165; i++) {
-                        (([&]() -> t1395 {
-                            return (sum += ((t1395) ((v)[i] * (v)[i])));
+                        (([&]() -> t3608 {
+                            return ((v1)[i] -= (v2)[i]);
+                        })());
+                    }
+                    return {};
+                })());
+                return v1;
+            })());
+        })());
+    }
+}
+
+namespace Vector {
+    template<typename t3612, int c164>
+    juniper::array<t3612, c164> scale(t3612 scalar, juniper::array<t3612, c164> v) {
+        return (([&]() -> juniper::array<t3612, c164> {
+            using a = t3612;
+            constexpr int32_t n = c164;
+            return (([&]() -> juniper::array<t3612, c164> {
+                (([&]() -> juniper::unit {
+                    int32_t guid166 = ((int32_t) 0);
+                    int32_t guid167 = n;
+                    for (int32_t i = guid166; i < guid167; i++) {
+                        (([&]() -> t3612 {
+                            return ((v)[i] *= scalar);
+                        })());
+                    }
+                    return {};
+                })());
+                return v;
+            })());
+        })());
+    }
+}
+
+namespace Vector {
+    template<typename t3618, int c166>
+    t3618 dot(juniper::array<t3618, c166> v1, juniper::array<t3618, c166> v2) {
+        return (([&]() -> t3618 {
+            using a = t3618;
+            constexpr int32_t n = c166;
+            return (([&]() -> t3618 {
+                t3618 guid168 = ((t3618) 0);
+                if (!(true)) {
+                    juniper::quit<juniper::unit>();
+                }
+                t3618 sum = guid168;
+                
+                (([&]() -> juniper::unit {
+                    int32_t guid169 = ((int32_t) 0);
+                    int32_t guid170 = n;
+                    for (int32_t i = guid169; i < guid170; i++) {
+                        (([&]() -> t3618 {
+                            return (sum += ((t3618) ((v1)[i] * (v2)[i])));
                         })());
                     }
                     return {};
@@ -7475,142 +8051,159 @@ namespace Vector {
 }
 
 namespace Vector {
-    template<typename t1397, int c97>
-    double magnitude(juniper::array<t1397, c97> v) {
-        return (([&]() -> double {
-            using a = t1397;
-            constexpr int32_t n = c97;
-            return sqrt_(toDouble<t1397>(magnitude2<t1397, c97>(v)));
-        })());
-    }
-}
-
-namespace Vector {
-    template<typename t1413, int c99>
-    juniper::array<t1413, c99> multiply(juniper::array<t1413, c99> u, juniper::array<t1413, c99> v) {
-        return (([&]() -> juniper::array<t1413, c99> {
-            using a = t1413;
-            constexpr int32_t n = c99;
-            return (([&]() -> juniper::array<t1413, c99> {
-                juniper::array<t1413, c99> guid166 = u;
+    template<typename t3624, int c169>
+    t3624 magnitude2(juniper::array<t3624, c169> v) {
+        return (([&]() -> t3624 {
+            using a = t3624;
+            constexpr int32_t n = c169;
+            return (([&]() -> t3624 {
+                t3624 guid171 = ((t3624) 0);
                 if (!(true)) {
                     juniper::quit<juniper::unit>();
                 }
-                juniper::array<t1413, c99> result = guid166;
+                t3624 sum = guid171;
                 
                 (([&]() -> juniper::unit {
-                    int32_t guid167 = ((int32_t) 0);
-                    int32_t guid168 = n;
-                    for (int32_t i = guid167; i < guid168; i++) {
-                        (([&]() -> t1413 {
-                            return ((result)[i] *= (v)[i]);
+                    int32_t guid172 = ((int32_t) 0);
+                    int32_t guid173 = n;
+                    for (int32_t i = guid172; i < guid173; i++) {
+                        (([&]() -> t3624 {
+                            return (sum += ((t3624) ((v)[i] * (v)[i])));
                         })());
                     }
                     return {};
                 })());
-                return result;
+                return sum;
             })());
         })());
     }
 }
 
 namespace Vector {
-    template<typename t1422, int c102>
-    juniper::array<t1422, c102> normalize(juniper::array<t1422, c102> v) {
-        return (([&]() -> juniper::array<t1422, c102> {
-            using a = t1422;
-            constexpr int32_t n = c102;
-            return (([&]() -> juniper::array<t1422, c102> {
-                double guid169 = magnitude<t1422, c102>(v);
-                if (!(true)) {
-                    juniper::quit<juniper::unit>();
-                }
-                double mag = guid169;
-                
-                return (((bool) (mag > ((t1422) 0))) ? 
-                    (([&]() -> juniper::array<t1422, c102> {
-                        juniper::array<t1422, c102> guid170 = v;
-                        if (!(true)) {
-                            juniper::quit<juniper::unit>();
-                        }
-                        juniper::array<t1422, c102> result = guid170;
-                        
-                        (([&]() -> juniper::unit {
-                            int32_t guid171 = ((int32_t) 0);
-                            int32_t guid172 = n;
-                            for (int32_t i = guid171; i < guid172; i++) {
-                                (([&]() -> t1422 {
-                                    return ((result)[i] = fromDouble<t1422>(((double) (toDouble<t1422>((result)[i]) / mag))));
-                                })());
-                            }
-                            return {};
-                        })());
-                        return result;
-                    })())
-                :
-                    (([&]() -> juniper::array<t1422, c102> {
-                        return v;
-                    })()));
-            })());
-        })());
-    }
-}
-
-namespace Vector {
-    template<typename t1433, int c106>
-    double angle(juniper::array<t1433, c106> v1, juniper::array<t1433, c106> v2) {
+    template<typename t3626, int c172>
+    double magnitude(juniper::array<t3626, c172> v) {
         return (([&]() -> double {
-            using a = t1433;
-            constexpr int32_t n = c106;
-            return acos_(((double) (toDouble<t1433>(dot<t1433, c106>(v1, v2)) / sqrt_(toDouble<t1433>(((t1433) (magnitude2<t1433, c106>(v1) * magnitude2<t1433, c106>(v2))))))));
+            using a = t3626;
+            constexpr int32_t n = c172;
+            return sqrt_(toDouble<t3626>(magnitude2<t3626, c172>(v)));
         })());
     }
 }
 
 namespace Vector {
-    template<typename t1475>
-    juniper::array<t1475, 3> cross(juniper::array<t1475, 3> u, juniper::array<t1475, 3> v) {
-        return (([&]() -> juniper::array<t1475, 3> {
-            using a = t1475;
-            return (juniper::array<t1475, 3> { {((t1475) (((t1475) ((u)[y] * (v)[z])) - ((t1475) ((u)[z] * (v)[y])))), ((t1475) (((t1475) ((u)[z] * (v)[x])) - ((t1475) ((u)[x] * (v)[z])))), ((t1475) (((t1475) ((u)[x] * (v)[y])) - ((t1475) ((u)[y] * (v)[x]))))} });
-        })());
-    }
-}
-
-namespace Vector {
-    template<typename t1477, int c122>
-    juniper::array<t1477, c122> project(juniper::array<t1477, c122> a, juniper::array<t1477, c122> b) {
-        return (([&]() -> juniper::array<t1477, c122> {
-            using z = t1477;
-            constexpr int32_t n = c122;
-            return (([&]() -> juniper::array<t1477, c122> {
-                juniper::array<t1477, c122> guid173 = normalize<t1477, c122>(b);
-                if (!(true)) {
-                    juniper::quit<juniper::unit>();
-                }
-                juniper::array<t1477, c122> bn = guid173;
-                
-                return scale<t1477, c122>(dot<t1477, c122>(a, bn), bn);
+    template<typename t3642, int c174>
+    juniper::array<t3642, c174> multiply(juniper::array<t3642, c174> u, juniper::array<t3642, c174> v) {
+        return (([&]() -> juniper::array<t3642, c174> {
+            using a = t3642;
+            constexpr int32_t n = c174;
+            return (([&]() -> juniper::array<t3642, c174> {
+                (([&]() -> juniper::unit {
+                    int32_t guid174 = ((int32_t) 0);
+                    int32_t guid175 = n;
+                    for (int32_t i = guid174; i < guid175; i++) {
+                        (([&]() -> t3642 {
+                            return ((u)[i] *= (v)[i]);
+                        })());
+                    }
+                    return {};
+                })());
+                return u;
             })());
         })());
     }
 }
 
 namespace Vector {
-    template<typename t1493, int c126>
-    juniper::array<t1493, c126> projectPlane(juniper::array<t1493, c126> a, juniper::array<t1493, c126> m) {
-        return (([&]() -> juniper::array<t1493, c126> {
-            using z = t1493;
-            constexpr int32_t n = c126;
-            return subtract<t1493, c126>(a, project<t1493, c126>(a, m));
+    template<typename t3651, int c177>
+    juniper::array<t3651, c177> normalize(juniper::array<t3651, c177> v) {
+        return (([&]() -> juniper::array<t3651, c177> {
+            using a = t3651;
+            constexpr int32_t n = c177;
+            return (([&]() -> juniper::array<t3651, c177> {
+                double guid176 = magnitude<t3651, c177>(v);
+                if (!(true)) {
+                    juniper::quit<juniper::unit>();
+                }
+                double mag = guid176;
+                
+                (([&]() -> juniper::unit {
+                    if (((bool) (mag > ((t3651) 0)))) {
+                        (([&]() -> juniper::unit {
+                            return (([&]() -> juniper::unit {
+                                int32_t guid177 = ((int32_t) 0);
+                                int32_t guid178 = n;
+                                for (int32_t i = guid177; i < guid178; i++) {
+                                    (([&]() -> t3651 {
+                                        return ((v)[i] = fromDouble<t3651>(((double) (toDouble<t3651>((v)[i]) / mag))));
+                                    })());
+                                }
+                                return {};
+                            })());
+                        })());
+                    }
+                    return {};
+                })());
+                return v;
+            })());
+        })());
+    }
+}
+
+namespace Vector {
+    template<typename t3662, int c181>
+    double angle(juniper::array<t3662, c181> v1, juniper::array<t3662, c181> v2) {
+        return (([&]() -> double {
+            using a = t3662;
+            constexpr int32_t n = c181;
+            return acos_(((double) (toDouble<t3662>(dot<t3662, c181>(v1, v2)) / sqrt_(toDouble<t3662>(((t3662) (magnitude2<t3662, c181>(v1) * magnitude2<t3662, c181>(v2))))))));
+        })());
+    }
+}
+
+namespace Vector {
+    template<typename t3704>
+    juniper::array<t3704, 3> cross(juniper::array<t3704, 3> u, juniper::array<t3704, 3> v) {
+        return (([&]() -> juniper::array<t3704, 3> {
+            using a = t3704;
+            return (juniper::array<t3704, 3> { {((t3704) (((t3704) ((u)[y] * (v)[z])) - ((t3704) ((u)[z] * (v)[y])))), ((t3704) (((t3704) ((u)[z] * (v)[x])) - ((t3704) ((u)[x] * (v)[z])))), ((t3704) (((t3704) ((u)[x] * (v)[y])) - ((t3704) ((u)[y] * (v)[x]))))} });
+        })());
+    }
+}
+
+namespace Vector {
+    template<typename t3706, int c197>
+    juniper::array<t3706, c197> project(juniper::array<t3706, c197> a, juniper::array<t3706, c197> b) {
+        return (([&]() -> juniper::array<t3706, c197> {
+            using z = t3706;
+            constexpr int32_t n = c197;
+            return (([&]() -> juniper::array<t3706, c197> {
+                juniper::array<t3706, c197> guid179 = normalize<t3706, c197>(b);
+                if (!(true)) {
+                    juniper::quit<juniper::unit>();
+                }
+                juniper::array<t3706, c197> bn = guid179;
+                
+                return scale<t3706, c197>(dot<t3706, c197>(a, bn), bn);
+            })());
+        })());
+    }
+}
+
+namespace Vector {
+    template<typename t3722, int c201>
+    juniper::array<t3722, c201> projectPlane(juniper::array<t3722, c201> a, juniper::array<t3722, c201> m) {
+        return (([&]() -> juniper::array<t3722, c201> {
+            using z = t3722;
+            constexpr int32_t n = c201;
+            return subtract<t3722, c201>(a, project<t3722, c201>(a, m));
         })());
     }
 }
 
 namespace CharList {
-    template<int c129>
-    juniper::records::recordt_0<juniper::array<uint8_t, c129>, uint32_t> toUpper(juniper::records::recordt_0<juniper::array<uint8_t, c129>, uint32_t> str) {
-        return List::map<void, uint8_t, uint8_t, c129>(juniper::function<void, uint8_t(uint8_t)>([](uint8_t c) -> uint8_t { 
+    template<int c204>
+    juniper::records::recordt_0<juniper::array<uint8_t, c204>, uint32_t> toUpper(juniper::records::recordt_0<juniper::array<uint8_t, c204>, uint32_t> str) {
+        return List::map<uint8_t, void, uint8_t, c204>(juniper::function<void, uint8_t(uint8_t)>([](uint8_t c) -> uint8_t { 
             return (((bool) (((bool) (c >= ((uint8_t) 97))) && ((bool) (c <= ((uint8_t) 122))))) ? 
                 ((uint8_t) (c - ((uint8_t) 32)))
             :
@@ -7620,9 +8213,9 @@ namespace CharList {
 }
 
 namespace CharList {
-    template<int c130>
-    juniper::records::recordt_0<juniper::array<uint8_t, c130>, uint32_t> toLower(juniper::records::recordt_0<juniper::array<uint8_t, c130>, uint32_t> str) {
-        return List::map<void, uint8_t, uint8_t, c130>(juniper::function<void, uint8_t(uint8_t)>([](uint8_t c) -> uint8_t { 
+    template<int c205>
+    juniper::records::recordt_0<juniper::array<uint8_t, c205>, uint32_t> toLower(juniper::records::recordt_0<juniper::array<uint8_t, c205>, uint32_t> str) {
+        return List::map<uint8_t, void, uint8_t, c205>(juniper::function<void, uint8_t(uint8_t)>([](uint8_t c) -> uint8_t { 
             return (((bool) (((bool) (c >= ((uint8_t) 65))) && ((bool) (c <= ((uint8_t) 90))))) ? 
                 ((uint8_t) (c + ((uint8_t) 32)))
             :
@@ -7632,21 +8225,21 @@ namespace CharList {
 }
 
 namespace CharList {
-    template<int c131>
-    juniper::records::recordt_0<juniper::array<uint8_t, (1)+(c131)>, uint32_t> i32ToCharList(int32_t m) {
-        return (([&]() -> juniper::records::recordt_0<juniper::array<uint8_t, (1)+(c131)>, uint32_t> {
-            constexpr int32_t n = c131;
-            return (([&]() -> juniper::records::recordt_0<juniper::array<uint8_t, (1)+(c131)>, uint32_t> {
-                juniper::records::recordt_0<juniper::array<uint8_t, (1)+(c131)>, uint32_t> guid174 = (([&]() -> juniper::records::recordt_0<juniper::array<uint8_t, (1)+(c131)>, uint32_t>{
-                    juniper::records::recordt_0<juniper::array<uint8_t, (1)+(c131)>, uint32_t> guid175;
-                    guid175.data = (juniper::array<uint8_t, (1)+(c131)>().fill(((uint8_t) 0)));
-                    guid175.length = ((uint32_t) 0);
-                    return guid175;
+    template<int c206>
+    juniper::records::recordt_0<juniper::array<uint8_t, ((-1)+((c206)*(-1)))*(-1)>, uint32_t> i32ToCharList(int32_t m) {
+        return (([&]() -> juniper::records::recordt_0<juniper::array<uint8_t, ((-1)+((c206)*(-1)))*(-1)>, uint32_t> {
+            constexpr int32_t n = c206;
+            return (([&]() -> juniper::records::recordt_0<juniper::array<uint8_t, ((-1)+((c206)*(-1)))*(-1)>, uint32_t> {
+                juniper::records::recordt_0<juniper::array<uint8_t, ((-1)+((c206)*(-1)))*(-1)>, uint32_t> guid180 = (([&]() -> juniper::records::recordt_0<juniper::array<uint8_t, ((-1)+((c206)*(-1)))*(-1)>, uint32_t>{
+                    juniper::records::recordt_0<juniper::array<uint8_t, ((-1)+((c206)*(-1)))*(-1)>, uint32_t> guid181;
+                    guid181.data = array<uint8_t, ((-1)+((c206)*(-1)))*(-1)>(((uint8_t) 0));
+                    guid181.length = ((uint32_t) 0);
+                    return guid181;
                 })());
                 if (!(true)) {
                     juniper::quit<juniper::unit>();
                 }
-                juniper::records::recordt_0<juniper::array<uint8_t, (1)+(c131)>, uint32_t> ret = guid174;
+                juniper::records::recordt_0<juniper::array<uint8_t, ((-1)+((c206)*(-1)))*(-1)>, uint32_t> ret = guid180;
                 
                 (([&]() -> juniper::unit {
                     
@@ -7662,56 +8255,56 @@ namespace CharList {
 }
 
 namespace CharList {
-    template<int c132>
-    uint32_t length(juniper::records::recordt_0<juniper::array<uint8_t, c132>, uint32_t> s) {
+    template<int c208>
+    uint32_t length(juniper::records::recordt_0<juniper::array<uint8_t, c208>, uint32_t> s) {
         return (([&]() -> uint32_t {
-            constexpr int32_t n = c132;
+            constexpr int32_t n = c208;
             return ((uint32_t) ((s).length - ((uint32_t) 1)));
         })());
     }
 }
 
 namespace CharList {
-    template<int c133, int c134, int c135>
-    juniper::records::recordt_0<juniper::array<uint8_t, (1)+(c135)>, uint32_t> concat(juniper::records::recordt_0<juniper::array<uint8_t, (1)+(c133)>, uint32_t> sA, juniper::records::recordt_0<juniper::array<uint8_t, (1)+(c134)>, uint32_t> sB) {
-        return (([&]() -> juniper::records::recordt_0<juniper::array<uint8_t, (1)+(c135)>, uint32_t> {
-            constexpr int32_t aCap = c133;
-            constexpr int32_t bCap = c134;
-            constexpr int32_t retCap = c135;
-            return (([&]() -> juniper::records::recordt_0<juniper::array<uint8_t, (1)+(c135)>, uint32_t> {
-                uint32_t guid176 = ((uint32_t) 0);
+    template<int c209, int c210, int c211>
+    juniper::records::recordt_0<juniper::array<uint8_t, ((-1)+((c211)*(-1)))*(-1)>, uint32_t> concat(juniper::records::recordt_0<juniper::array<uint8_t, (1)+(c209)>, uint32_t> sA, juniper::records::recordt_0<juniper::array<uint8_t, (1)+(c210)>, uint32_t> sB) {
+        return (([&]() -> juniper::records::recordt_0<juniper::array<uint8_t, ((-1)+((c211)*(-1)))*(-1)>, uint32_t> {
+            constexpr int32_t aCap = c209;
+            constexpr int32_t bCap = c210;
+            constexpr int32_t retCap = c211;
+            return (([&]() -> juniper::records::recordt_0<juniper::array<uint8_t, ((-1)+((c211)*(-1)))*(-1)>, uint32_t> {
+                uint32_t guid182 = ((uint32_t) 0);
                 if (!(true)) {
                     juniper::quit<juniper::unit>();
                 }
-                uint32_t j = guid176;
+                uint32_t j = guid182;
                 
-                uint32_t guid177 = length<(1)+(c133)>(sA);
+                uint32_t guid183 = length<(1)+(c209)>(sA);
                 if (!(true)) {
                     juniper::quit<juniper::unit>();
                 }
-                uint32_t lenA = guid177;
+                uint32_t lenA = guid183;
                 
-                uint32_t guid178 = length<(1)+(c134)>(sB);
+                uint32_t guid184 = length<(1)+(c210)>(sB);
                 if (!(true)) {
                     juniper::quit<juniper::unit>();
                 }
-                uint32_t lenB = guid178;
+                uint32_t lenB = guid184;
                 
-                juniper::records::recordt_0<juniper::array<uint8_t, (1)+(c135)>, uint32_t> guid179 = (([&]() -> juniper::records::recordt_0<juniper::array<uint8_t, (1)+(c135)>, uint32_t>{
-                    juniper::records::recordt_0<juniper::array<uint8_t, (1)+(c135)>, uint32_t> guid180;
-                    guid180.data = (juniper::array<uint8_t, (1)+(c135)>().fill(((uint8_t) 0)));
-                    guid180.length = ((uint32_t) (((uint32_t) (lenA + lenB)) + ((uint32_t) 1)));
-                    return guid180;
+                juniper::records::recordt_0<juniper::array<uint8_t, ((-1)+((c211)*(-1)))*(-1)>, uint32_t> guid185 = (([&]() -> juniper::records::recordt_0<juniper::array<uint8_t, ((-1)+((c211)*(-1)))*(-1)>, uint32_t>{
+                    juniper::records::recordt_0<juniper::array<uint8_t, ((-1)+((c211)*(-1)))*(-1)>, uint32_t> guid186;
+                    guid186.data = array<uint8_t, ((-1)+((c211)*(-1)))*(-1)>(((uint8_t) 0));
+                    guid186.length = ((uint32_t) (((uint32_t) (lenA + lenB)) + ((uint32_t) 1)));
+                    return guid186;
                 })());
                 if (!(true)) {
                     juniper::quit<juniper::unit>();
                 }
-                juniper::records::recordt_0<juniper::array<uint8_t, (1)+(c135)>, uint32_t> out = guid179;
+                juniper::records::recordt_0<juniper::array<uint8_t, ((-1)+((c211)*(-1)))*(-1)>, uint32_t> out = guid185;
                 
                 (([&]() -> juniper::unit {
-                    uint32_t guid181 = ((uint32_t) 0);
-                    uint32_t guid182 = lenA;
-                    for (uint32_t i = guid181; i < guid182; i++) {
+                    uint32_t guid187 = ((uint32_t) 0);
+                    uint32_t guid188 = lenA;
+                    for (uint32_t i = guid187; i < guid188; i++) {
                         (([&]() -> uint32_t {
                             (((out).data)[j] = ((sA).data)[i]);
                             return (j += ((uint32_t) 1));
@@ -7720,9 +8313,9 @@ namespace CharList {
                     return {};
                 })());
                 (([&]() -> juniper::unit {
-                    uint32_t guid183 = ((uint32_t) 0);
-                    uint32_t guid184 = lenB;
-                    for (uint32_t i = guid183; i < guid184; i++) {
+                    uint32_t guid189 = ((uint32_t) 0);
+                    uint32_t guid190 = lenB;
+                    for (uint32_t i = guid189; i < guid190; i++) {
                         (([&]() -> uint32_t {
                             (((out).data)[j] = ((sB).data)[i]);
                             return (j += ((uint32_t) 1));
@@ -7737,12 +8330,12 @@ namespace CharList {
 }
 
 namespace CharList {
-    template<int c142, int c143>
-    juniper::records::recordt_0<juniper::array<uint8_t, (((-1)+((c142)*(-1)))+((c143)*(-1)))*(-1)>, uint32_t> safeConcat(juniper::records::recordt_0<juniper::array<uint8_t, (1)+(c142)>, uint32_t> sA, juniper::records::recordt_0<juniper::array<uint8_t, (1)+(c143)>, uint32_t> sB) {
-        return (([&]() -> juniper::records::recordt_0<juniper::array<uint8_t, (((-1)+((c142)*(-1)))+((c143)*(-1)))*(-1)>, uint32_t> {
-            constexpr int32_t aCap = c142;
-            constexpr int32_t bCap = c143;
-            return concat<c142, c143, (-1)+((((-1)+((c142)*(-1)))+((c143)*(-1)))*(-1))>(sA, sB);
+    template<int c219, int c220>
+    juniper::records::recordt_0<juniper::array<uint8_t, (((-1)+((c219)*(-1)))+((c220)*(-1)))*(-1)>, uint32_t> safeConcat(juniper::records::recordt_0<juniper::array<uint8_t, (1)+(c219)>, uint32_t> sA, juniper::records::recordt_0<juniper::array<uint8_t, (1)+(c220)>, uint32_t> sB) {
+        return (([&]() -> juniper::records::recordt_0<juniper::array<uint8_t, (((-1)+((c219)*(-1)))+((c220)*(-1)))*(-1)>, uint32_t> {
+            constexpr int32_t aCap = c219;
+            constexpr int32_t bCap = c220;
+            return concat<c219, c220, (((c219)*(-1))+((c220)*(-1)))*(-1)>(sA, sB);
         })());
     }
 }
@@ -7750,11 +8343,11 @@ namespace CharList {
 namespace Random {
     int32_t random_(int32_t low, int32_t high) {
         return (([&]() -> int32_t {
-            int32_t guid185 = ((int32_t) 0);
+            int32_t guid191 = ((int32_t) 0);
             if (!(true)) {
                 juniper::quit<juniper::unit>();
             }
-            int32_t ret = guid185;
+            int32_t ret = guid191;
             
             (([&]() -> juniper::unit {
                 ret = random(low, high);
@@ -7775,19 +8368,45 @@ namespace Random {
 }
 
 namespace Random {
-    template<typename t1563, int c147>
-    t1563 choice(juniper::records::recordt_0<juniper::array<t1563, c147>, uint32_t> lst) {
-        return (([&]() -> t1563 {
-            using t = t1563;
-            constexpr int32_t n = c147;
-            return (([&]() -> t1563 {
-                int32_t guid186 = random_(((int32_t) 0), u32ToI32((lst).length));
+    template<typename t3800, int c224>
+    t3800 choice(juniper::records::recordt_0<juniper::array<t3800, c224>, uint32_t> lst) {
+        return (([&]() -> t3800 {
+            using t = t3800;
+            constexpr int32_t n = c224;
+            return (([&]() -> t3800 {
+                int32_t guid192 = random_(((int32_t) 0), u32ToI32((lst).length));
                 if (!(true)) {
                     juniper::quit<juniper::unit>();
                 }
-                int32_t i = guid186;
+                int32_t i = guid192;
                 
-                return Maybe::get<t1563>(List::nth<t1563, c147>(i32ToU32(i), lst));
+                return List::get<uint32_t, t3800, c224>(i32ToU32(i), lst);
+            })());
+        })());
+    }
+}
+
+namespace Random {
+    template<typename t3820, int c226>
+    Prelude::maybe<t3820> tryChoice(juniper::records::recordt_0<juniper::array<t3820, c226>, uint32_t> lst) {
+        return (([&]() -> Prelude::maybe<t3820> {
+            using t = t3820;
+            constexpr int32_t n = c226;
+            return (([&]() -> Prelude::maybe<t3820> {
+                return (((bool) ((lst).length == ((uint32_t) 0))) ? 
+                    (([&]() -> Prelude::maybe<t3820> {
+                        return nothing<t3820>();
+                    })())
+                :
+                    (([&]() -> Prelude::maybe<t3820> {
+                        int32_t guid193 = random_(((int32_t) 0), u32ToI32((lst).length));
+                        if (!(true)) {
+                            juniper::quit<juniper::unit>();
+                        }
+                        int32_t i = guid193;
+                        
+                        return List::tryGet<uint32_t, t3820, c226>(i32ToU32(i), lst);
+                    })()));
             })());
         })());
     }
@@ -7796,33 +8415,33 @@ namespace Random {
 namespace Color {
     juniper::records::recordt_3<uint8_t, uint8_t, uint8_t> hsvToRgb(juniper::records::recordt_5<float, float, float> color) {
         return (([&]() -> juniper::records::recordt_3<uint8_t, uint8_t, uint8_t> {
-            juniper::records::recordt_5<float, float, float> guid187 = color;
+            juniper::records::recordt_5<float, float, float> guid194 = color;
             if (!(true)) {
                 juniper::quit<juniper::unit>();
             }
-            float v = (guid187).v;
-            float s = (guid187).s;
-            float h = (guid187).h;
+            float v = (guid194).v;
+            float s = (guid194).s;
+            float h = (guid194).h;
             
-            float guid188 = ((float) (v * s));
+            float guid195 = ((float) (v * s));
             if (!(true)) {
                 juniper::quit<juniper::unit>();
             }
-            float c = guid188;
+            float c = guid195;
             
-            float guid189 = ((float) (c * toFloat<double>(((double) (1.0 - Math::fabs_(((double) (Math::fmod_(((double) (toDouble<float>(h) / ((double) 60))), 2.0) - 1.0))))))));
+            float guid196 = ((float) (c * toFloat<double>(((double) (((double) 1.0) - Math::fabs_(((double) (Math::fmod_(((double) (toDouble<float>(h) / ((double) 60))), ((double) 2.0)) - ((double) 1.0)))))))));
             if (!(true)) {
                 juniper::quit<juniper::unit>();
             }
-            float x = guid189;
+            float x = guid196;
             
-            float guid190 = ((float) (v - c));
+            float guid197 = ((float) (v - c));
             if (!(true)) {
                 juniper::quit<juniper::unit>();
             }
-            float m = guid190;
+            float m = guid197;
             
-            juniper::tuple3<float, float, float> guid191 = (((bool) (((bool) (0.0f <= h)) && ((bool) (h < 60.0f)))) ? 
+            juniper::tuple3<float, float, float> guid198 = (((bool) (((bool) (0.0f <= h)) && ((bool) (h < 60.0f)))) ? 
                 (juniper::tuple3<float,float,float>{c, x, 0.0f})
             :
                 (((bool) (((bool) (60.0f <= h)) && ((bool) (h < 120.0f)))) ? 
@@ -7841,34 +8460,34 @@ namespace Color {
             if (!(true)) {
                 juniper::quit<juniper::unit>();
             }
-            float bPrime = (guid191).e3;
-            float gPrime = (guid191).e2;
-            float rPrime = (guid191).e1;
+            float bPrime = (guid198).e3;
+            float gPrime = (guid198).e2;
+            float rPrime = (guid198).e1;
             
-            float guid192 = ((float) (((float) (rPrime + m)) * 255.0f));
+            float guid199 = ((float) (((float) (rPrime + m)) * 255.0f));
             if (!(true)) {
                 juniper::quit<juniper::unit>();
             }
-            float r = guid192;
+            float r = guid199;
             
-            float guid193 = ((float) (((float) (gPrime + m)) * 255.0f));
+            float guid200 = ((float) (((float) (gPrime + m)) * 255.0f));
             if (!(true)) {
                 juniper::quit<juniper::unit>();
             }
-            float g = guid193;
+            float g = guid200;
             
-            float guid194 = ((float) (((float) (bPrime + m)) * 255.0f));
+            float guid201 = ((float) (((float) (bPrime + m)) * 255.0f));
             if (!(true)) {
                 juniper::quit<juniper::unit>();
             }
-            float b = guid194;
+            float b = guid201;
             
             return (([&]() -> juniper::records::recordt_3<uint8_t, uint8_t, uint8_t>{
-                juniper::records::recordt_3<uint8_t, uint8_t, uint8_t> guid195;
-                guid195.r = toUInt8<float>(r);
-                guid195.g = toUInt8<float>(g);
-                guid195.b = toUInt8<float>(b);
-                return guid195;
+                juniper::records::recordt_3<uint8_t, uint8_t, uint8_t> guid202;
+                guid202.r = toUInt8<float>(r);
+                guid202.g = toUInt8<float>(g);
+                guid202.b = toUInt8<float>(b);
+                return guid202;
             })());
         })());
     }
@@ -7877,13 +8496,13 @@ namespace Color {
 namespace Color {
     uint16_t rgbToRgb565(juniper::records::recordt_3<uint8_t, uint8_t, uint8_t> color) {
         return (([&]() -> uint16_t {
-            juniper::records::recordt_3<uint8_t, uint8_t, uint8_t> guid196 = color;
+            juniper::records::recordt_3<uint8_t, uint8_t, uint8_t> guid203 = color;
             if (!(true)) {
                 juniper::quit<juniper::unit>();
             }
-            uint8_t b = (guid196).b;
-            uint8_t g = (guid196).g;
-            uint8_t r = (guid196).r;
+            uint8_t b = (guid203).b;
+            uint8_t g = (guid203).g;
+            uint8_t r = (guid203).r;
             
             return ((uint16_t) (((uint16_t) (((uint16_t) (((uint16_t) (u8ToU16(r) & ((uint16_t) 248))) << ((uint32_t) 8))) | ((uint16_t) (((uint16_t) (u8ToU16(g) & ((uint16_t) 252))) << ((uint32_t) 3))))) | ((uint16_t) (u8ToU16(b) >> ((uint32_t) 3)))));
         })());
@@ -7892,92 +8511,92 @@ namespace Color {
 
 namespace Color {
     juniper::records::recordt_3<uint8_t, uint8_t, uint8_t> red = (([]() -> juniper::records::recordt_3<uint8_t, uint8_t, uint8_t>{
-        juniper::records::recordt_3<uint8_t, uint8_t, uint8_t> guid197;
-        guid197.r = ((uint8_t) 255);
-        guid197.g = ((uint8_t) 0);
-        guid197.b = ((uint8_t) 0);
-        return guid197;
+        juniper::records::recordt_3<uint8_t, uint8_t, uint8_t> guid204;
+        guid204.r = ((uint8_t) 255);
+        guid204.g = ((uint8_t) 0);
+        guid204.b = ((uint8_t) 0);
+        return guid204;
     })());
 }
 
 namespace Color {
     juniper::records::recordt_3<uint8_t, uint8_t, uint8_t> green = (([]() -> juniper::records::recordt_3<uint8_t, uint8_t, uint8_t>{
-        juniper::records::recordt_3<uint8_t, uint8_t, uint8_t> guid198;
-        guid198.r = ((uint8_t) 0);
-        guid198.g = ((uint8_t) 255);
-        guid198.b = ((uint8_t) 0);
-        return guid198;
+        juniper::records::recordt_3<uint8_t, uint8_t, uint8_t> guid205;
+        guid205.r = ((uint8_t) 0);
+        guid205.g = ((uint8_t) 255);
+        guid205.b = ((uint8_t) 0);
+        return guid205;
     })());
 }
 
 namespace Color {
     juniper::records::recordt_3<uint8_t, uint8_t, uint8_t> blue = (([]() -> juniper::records::recordt_3<uint8_t, uint8_t, uint8_t>{
-        juniper::records::recordt_3<uint8_t, uint8_t, uint8_t> guid199;
-        guid199.r = ((uint8_t) 0);
-        guid199.g = ((uint8_t) 0);
-        guid199.b = ((uint8_t) 255);
-        return guid199;
+        juniper::records::recordt_3<uint8_t, uint8_t, uint8_t> guid206;
+        guid206.r = ((uint8_t) 0);
+        guid206.g = ((uint8_t) 0);
+        guid206.b = ((uint8_t) 255);
+        return guid206;
     })());
 }
 
 namespace Color {
     juniper::records::recordt_3<uint8_t, uint8_t, uint8_t> black = (([]() -> juniper::records::recordt_3<uint8_t, uint8_t, uint8_t>{
-        juniper::records::recordt_3<uint8_t, uint8_t, uint8_t> guid200;
-        guid200.r = ((uint8_t) 0);
-        guid200.g = ((uint8_t) 0);
-        guid200.b = ((uint8_t) 0);
-        return guid200;
+        juniper::records::recordt_3<uint8_t, uint8_t, uint8_t> guid207;
+        guid207.r = ((uint8_t) 0);
+        guid207.g = ((uint8_t) 0);
+        guid207.b = ((uint8_t) 0);
+        return guid207;
     })());
 }
 
 namespace Color {
     juniper::records::recordt_3<uint8_t, uint8_t, uint8_t> white = (([]() -> juniper::records::recordt_3<uint8_t, uint8_t, uint8_t>{
-        juniper::records::recordt_3<uint8_t, uint8_t, uint8_t> guid201;
-        guid201.r = ((uint8_t) 255);
-        guid201.g = ((uint8_t) 255);
-        guid201.b = ((uint8_t) 255);
-        return guid201;
+        juniper::records::recordt_3<uint8_t, uint8_t, uint8_t> guid208;
+        guid208.r = ((uint8_t) 255);
+        guid208.g = ((uint8_t) 255);
+        guid208.b = ((uint8_t) 255);
+        return guid208;
     })());
 }
 
 namespace Color {
     juniper::records::recordt_3<uint8_t, uint8_t, uint8_t> yellow = (([]() -> juniper::records::recordt_3<uint8_t, uint8_t, uint8_t>{
-        juniper::records::recordt_3<uint8_t, uint8_t, uint8_t> guid202;
-        guid202.r = ((uint8_t) 255);
-        guid202.g = ((uint8_t) 255);
-        guid202.b = ((uint8_t) 0);
-        return guid202;
+        juniper::records::recordt_3<uint8_t, uint8_t, uint8_t> guid209;
+        guid209.r = ((uint8_t) 255);
+        guid209.g = ((uint8_t) 255);
+        guid209.b = ((uint8_t) 0);
+        return guid209;
     })());
 }
 
 namespace Color {
     juniper::records::recordt_3<uint8_t, uint8_t, uint8_t> magenta = (([]() -> juniper::records::recordt_3<uint8_t, uint8_t, uint8_t>{
-        juniper::records::recordt_3<uint8_t, uint8_t, uint8_t> guid203;
-        guid203.r = ((uint8_t) 255);
-        guid203.g = ((uint8_t) 0);
-        guid203.b = ((uint8_t) 255);
-        return guid203;
+        juniper::records::recordt_3<uint8_t, uint8_t, uint8_t> guid210;
+        guid210.r = ((uint8_t) 255);
+        guid210.g = ((uint8_t) 0);
+        guid210.b = ((uint8_t) 255);
+        return guid210;
     })());
 }
 
 namespace Color {
     juniper::records::recordt_3<uint8_t, uint8_t, uint8_t> cyan = (([]() -> juniper::records::recordt_3<uint8_t, uint8_t, uint8_t>{
-        juniper::records::recordt_3<uint8_t, uint8_t, uint8_t> guid204;
-        guid204.r = ((uint8_t) 0);
-        guid204.g = ((uint8_t) 255);
-        guid204.b = ((uint8_t) 255);
-        return guid204;
+        juniper::records::recordt_3<uint8_t, uint8_t, uint8_t> guid211;
+        guid211.r = ((uint8_t) 0);
+        guid211.g = ((uint8_t) 255);
+        guid211.b = ((uint8_t) 255);
+        return guid211;
     })());
 }
 
 namespace Arcada {
     bool arcadaBegin() {
         return (([&]() -> bool {
-            bool guid205 = false;
+            bool guid212 = false;
             if (!(true)) {
                 juniper::quit<juniper::unit>();
             }
-            bool ret = guid205;
+            bool ret = guid212;
             
             (([&]() -> juniper::unit {
                 ret = arcada.arcadaBegin();
@@ -8009,11 +8628,11 @@ namespace Arcada {
 namespace Arcada {
     uint16_t displayWidth() {
         return (([&]() -> uint16_t {
-            uint16_t guid206 = ((uint16_t) 0);
+            uint16_t guid213 = ((uint16_t) 0);
             if (!(true)) {
                 juniper::quit<juniper::unit>();
             }
-            uint16_t w = guid206;
+            uint16_t w = guid213;
             
             (([&]() -> juniper::unit {
                 w = arcada.display->width();
@@ -8027,11 +8646,11 @@ namespace Arcada {
 namespace Arcada {
     uint16_t displayHeight() {
         return (([&]() -> uint16_t {
-            uint16_t guid207 = ((uint16_t) 0);
+            uint16_t guid214 = ((uint16_t) 0);
             if (!(true)) {
                 juniper::quit<juniper::unit>();
             }
-            uint16_t h = guid207;
+            uint16_t h = guid214;
             
             (([&]() -> juniper::unit {
                 h = arcada.display->width();
@@ -8045,23 +8664,23 @@ namespace Arcada {
 namespace Arcada {
     bool createDoubleBuffer() {
         return (([&]() -> bool {
-            uint16_t guid208 = displayWidth();
+            uint16_t guid215 = displayWidth();
             if (!(true)) {
                 juniper::quit<juniper::unit>();
             }
-            uint16_t w = guid208;
+            uint16_t w = guid215;
             
-            uint16_t guid209 = displayHeight();
+            uint16_t guid216 = displayHeight();
             if (!(true)) {
                 juniper::quit<juniper::unit>();
             }
-            uint16_t h = guid209;
+            uint16_t h = guid216;
             
-            bool guid210 = true;
+            bool guid217 = true;
             if (!(true)) {
                 juniper::quit<juniper::unit>();
             }
-            bool ret = guid210;
+            bool ret = guid217;
             
             (([&]() -> juniper::unit {
                 ret = arcada.createFrameBuffer(w, h);
@@ -8075,11 +8694,11 @@ namespace Arcada {
 namespace Arcada {
     bool blitDoubleBuffer() {
         return (([&]() -> bool {
-            bool guid211 = true;
+            bool guid218 = true;
             if (!(true)) {
                 juniper::quit<juniper::unit>();
             }
-            bool ret = guid211;
+            bool ret = guid218;
             
             (([&]() -> juniper::unit {
                 ret = arcada.blitFrameBuffer(0, 0, true, false);
@@ -8909,11 +9528,11 @@ namespace Ble {
 namespace Ble {
     juniper::unit beginService(Ble::servicet s) {
         return (([&]() -> juniper::unit {
-            Ble::servicet guid212 = s;
-            if (!(((bool) (((bool) ((guid212).id() == ((uint8_t) 0))) && true)))) {
+            Ble::servicet guid219 = s;
+            if (!(((bool) (((bool) ((guid219).id() == ((uint8_t) 0))) && true)))) {
                 juniper::quit<juniper::unit>();
             }
-            void * p = (guid212).service();
+            void * p = (guid219).service();
             
             return (([&]() -> juniper::unit {
                 ((BLEService *) p)->begin();
@@ -8926,11 +9545,11 @@ namespace Ble {
 namespace Ble {
     juniper::unit beginCharacterstic(Ble::characterstict c) {
         return (([&]() -> juniper::unit {
-            Ble::characterstict guid213 = c;
-            if (!(((bool) (((bool) ((guid213).id() == ((uint8_t) 0))) && true)))) {
+            Ble::characterstict guid220 = c;
+            if (!(((bool) (((bool) ((guid220).id() == ((uint8_t) 0))) && true)))) {
                 juniper::quit<juniper::unit>();
             }
-            void * p = (guid213).characterstic();
+            void * p = (guid220).characterstic();
             
             return (([&]() -> juniper::unit {
                 ((BLECharacteristic *) p)->begin();
@@ -8941,29 +9560,29 @@ namespace Ble {
 }
 
 namespace Ble {
-    template<int c149>
-    uint16_t writeCharactersticBytes(Ble::characterstict c, juniper::records::recordt_0<juniper::array<uint8_t, c149>, uint32_t> bytes) {
+    template<int c228>
+    uint16_t writeCharactersticBytes(Ble::characterstict c, juniper::records::recordt_0<juniper::array<uint8_t, c228>, uint32_t> bytes) {
         return (([&]() -> uint16_t {
-            constexpr int32_t n = c149;
+            constexpr int32_t n = c228;
             return (([&]() -> uint16_t {
-                juniper::records::recordt_0<juniper::array<uint8_t, c149>, uint32_t> guid214 = bytes;
+                juniper::records::recordt_0<juniper::array<uint8_t, c228>, uint32_t> guid221 = bytes;
                 if (!(true)) {
                     juniper::quit<juniper::unit>();
                 }
-                uint32_t length = (guid214).length;
-                juniper::array<uint8_t, c149> data = (guid214).data;
+                uint32_t length = (guid221).length;
+                juniper::array<uint8_t, c228> data = (guid221).data;
                 
-                Ble::characterstict guid215 = c;
-                if (!(((bool) (((bool) ((guid215).id() == ((uint8_t) 0))) && true)))) {
+                Ble::characterstict guid222 = c;
+                if (!(((bool) (((bool) ((guid222).id() == ((uint8_t) 0))) && true)))) {
                     juniper::quit<juniper::unit>();
                 }
-                void * p = (guid215).characterstic();
+                void * p = (guid222).characterstic();
                 
-                uint16_t guid216 = ((uint16_t) 0);
+                uint16_t guid223 = ((uint16_t) 0);
                 if (!(true)) {
                     juniper::quit<juniper::unit>();
                 }
-                uint16_t ret = guid216;
+                uint16_t ret = guid223;
                 
                 (([&]() -> juniper::unit {
                     ret = ((BLECharacteristic *) p)->write((void *) &data[0], length);
@@ -8978,17 +9597,17 @@ namespace Ble {
 namespace Ble {
     uint16_t writeCharacterstic8(Ble::characterstict c, uint8_t n) {
         return (([&]() -> uint16_t {
-            Ble::characterstict guid217 = c;
-            if (!(((bool) (((bool) ((guid217).id() == ((uint8_t) 0))) && true)))) {
+            Ble::characterstict guid224 = c;
+            if (!(((bool) (((bool) ((guid224).id() == ((uint8_t) 0))) && true)))) {
                 juniper::quit<juniper::unit>();
             }
-            void * p = (guid217).characterstic();
+            void * p = (guid224).characterstic();
             
-            uint16_t guid218 = ((uint16_t) 0);
+            uint16_t guid225 = ((uint16_t) 0);
             if (!(true)) {
                 juniper::quit<juniper::unit>();
             }
-            uint16_t ret = guid218;
+            uint16_t ret = guid225;
             
             (([&]() -> juniper::unit {
                 ret = ((BLECharacteristic *) p)->write8(n);
@@ -9002,17 +9621,17 @@ namespace Ble {
 namespace Ble {
     uint16_t writeCharacterstic16(Ble::characterstict c, uint16_t n) {
         return (([&]() -> uint16_t {
-            Ble::characterstict guid219 = c;
-            if (!(((bool) (((bool) ((guid219).id() == ((uint8_t) 0))) && true)))) {
+            Ble::characterstict guid226 = c;
+            if (!(((bool) (((bool) ((guid226).id() == ((uint8_t) 0))) && true)))) {
                 juniper::quit<juniper::unit>();
             }
-            void * p = (guid219).characterstic();
+            void * p = (guid226).characterstic();
             
-            uint16_t guid220 = ((uint16_t) 0);
+            uint16_t guid227 = ((uint16_t) 0);
             if (!(true)) {
                 juniper::quit<juniper::unit>();
             }
-            uint16_t ret = guid220;
+            uint16_t ret = guid227;
             
             (([&]() -> juniper::unit {
                 ret = ((BLECharacteristic *) p)->write16(n);
@@ -9026,17 +9645,17 @@ namespace Ble {
 namespace Ble {
     uint16_t writeCharacterstic32(Ble::characterstict c, uint32_t n) {
         return (([&]() -> uint16_t {
-            Ble::characterstict guid221 = c;
-            if (!(((bool) (((bool) ((guid221).id() == ((uint8_t) 0))) && true)))) {
+            Ble::characterstict guid228 = c;
+            if (!(((bool) (((bool) ((guid228).id() == ((uint8_t) 0))) && true)))) {
                 juniper::quit<juniper::unit>();
             }
-            void * p = (guid221).characterstic();
+            void * p = (guid228).characterstic();
             
-            uint16_t guid222 = ((uint16_t) 0);
+            uint16_t guid229 = ((uint16_t) 0);
             if (!(true)) {
                 juniper::quit<juniper::unit>();
             }
-            uint16_t ret = guid222;
+            uint16_t ret = guid229;
             
             (([&]() -> juniper::unit {
                 ret = ((BLECharacteristic *) p)->write32(n);
@@ -9050,17 +9669,17 @@ namespace Ble {
 namespace Ble {
     uint16_t writeCharactersticSigned32(Ble::characterstict c, int32_t n) {
         return (([&]() -> uint16_t {
-            Ble::characterstict guid223 = c;
-            if (!(((bool) (((bool) ((guid223).id() == ((uint8_t) 0))) && true)))) {
+            Ble::characterstict guid230 = c;
+            if (!(((bool) (((bool) ((guid230).id() == ((uint8_t) 0))) && true)))) {
                 juniper::quit<juniper::unit>();
             }
-            void * p = (guid223).characterstic();
+            void * p = (guid230).characterstic();
             
-            uint16_t guid224 = ((uint16_t) 0);
+            uint16_t guid231 = ((uint16_t) 0);
             if (!(true)) {
                 juniper::quit<juniper::unit>();
             }
-            uint16_t ret = guid224;
+            uint16_t ret = guid231;
             
             (([&]() -> juniper::unit {
                 ret = ((BLECharacteristic *) p)->write32((int) n);
@@ -9072,22 +9691,22 @@ namespace Ble {
 }
 
 namespace Ble {
-    template<typename t1917>
-    uint16_t writeGeneric(Ble::characterstict c, t1917 x) {
+    template<typename t4201>
+    uint16_t writeGeneric(Ble::characterstict c, t4201 x) {
         return (([&]() -> uint16_t {
-            using t = t1917;
+            using t = t4201;
             return (([&]() -> uint16_t {
-                Ble::characterstict guid225 = c;
-                if (!(((bool) (((bool) ((guid225).id() == ((uint8_t) 0))) && true)))) {
+                Ble::characterstict guid232 = c;
+                if (!(((bool) (((bool) ((guid232).id() == ((uint8_t) 0))) && true)))) {
                     juniper::quit<juniper::unit>();
                 }
-                void * p = (guid225).characterstic();
+                void * p = (guid232).characterstic();
                 
-                uint16_t guid226 = ((uint16_t) 0);
+                uint16_t guid233 = ((uint16_t) 0);
                 if (!(true)) {
                     juniper::quit<juniper::unit>();
                 }
-                uint16_t ret = guid226;
+                uint16_t ret = guid233;
                 
                 (([&]() -> juniper::unit {
                     ret = ((BLECharacteristic *) p)->write((void *) &x, sizeof(t));
@@ -9100,18 +9719,18 @@ namespace Ble {
 }
 
 namespace Ble {
-    template<typename t1922>
-    t1922 readGeneric(Ble::characterstict c) {
-        return (([&]() -> t1922 {
-            using t = t1922;
-            return (([&]() -> t1922 {
-                Ble::characterstict guid227 = c;
-                if (!(((bool) (((bool) ((guid227).id() == ((uint8_t) 0))) && true)))) {
+    template<typename t4206>
+    t4206 readGeneric(Ble::characterstict c) {
+        return (([&]() -> t4206 {
+            using t = t4206;
+            return (([&]() -> t4206 {
+                Ble::characterstict guid234 = c;
+                if (!(((bool) (((bool) ((guid234).id() == ((uint8_t) 0))) && true)))) {
                     juniper::quit<juniper::unit>();
                 }
-                void * p = (guid227).characterstic();
+                void * p = (guid234).characterstic();
                 
-                t1922 ret;
+                t4206 ret;
                 
                 (([&]() -> juniper::unit {
                     ((BLECharacteristic *) p)->read((void *) &ret, sizeof(t));
@@ -9126,23 +9745,23 @@ namespace Ble {
 namespace Ble {
     juniper::unit setCharacteristicPermission(Ble::characterstict c, Ble::secureModet readPermission, Ble::secureModet writePermission) {
         return (([&]() -> juniper::unit {
-            Ble::secureModet guid228 = readPermission;
-            if (!(((bool) (((bool) ((guid228).id() == ((uint8_t) 0))) && true)))) {
+            Ble::secureModet guid235 = readPermission;
+            if (!(((bool) (((bool) ((guid235).id() == ((uint8_t) 0))) && true)))) {
                 juniper::quit<juniper::unit>();
             }
-            uint16_t readN = (guid228).secureMode();
+            uint16_t readN = (guid235).secureMode();
             
-            Ble::secureModet guid229 = writePermission;
-            if (!(((bool) (((bool) ((guid229).id() == ((uint8_t) 0))) && true)))) {
+            Ble::secureModet guid236 = writePermission;
+            if (!(((bool) (((bool) ((guid236).id() == ((uint8_t) 0))) && true)))) {
                 juniper::quit<juniper::unit>();
             }
-            uint16_t writeN = (guid229).secureMode();
+            uint16_t writeN = (guid236).secureMode();
             
-            Ble::characterstict guid230 = c;
-            if (!(((bool) (((bool) ((guid230).id() == ((uint8_t) 0))) && true)))) {
+            Ble::characterstict guid237 = c;
+            if (!(((bool) (((bool) ((guid237).id() == ((uint8_t) 0))) && true)))) {
                 juniper::quit<juniper::unit>();
             }
-            void * p = (guid230).characterstic();
+            void * p = (guid237).characterstic();
             
             return (([&]() -> juniper::unit {
                 ((BLECharacteristic *) p)->setPermission((SecureMode_t) readN, (SecureMode_t) writeN);
@@ -9155,17 +9774,17 @@ namespace Ble {
 namespace Ble {
     juniper::unit setCharacteristicProperties(Ble::characterstict c, Ble::propertiest prop) {
         return (([&]() -> juniper::unit {
-            Ble::propertiest guid231 = prop;
-            if (!(((bool) (((bool) ((guid231).id() == ((uint8_t) 0))) && true)))) {
+            Ble::propertiest guid238 = prop;
+            if (!(((bool) (((bool) ((guid238).id() == ((uint8_t) 0))) && true)))) {
                 juniper::quit<juniper::unit>();
             }
-            uint8_t propN = (guid231).properties();
+            uint8_t propN = (guid238).properties();
             
-            Ble::characterstict guid232 = c;
-            if (!(((bool) (((bool) ((guid232).id() == ((uint8_t) 0))) && true)))) {
+            Ble::characterstict guid239 = c;
+            if (!(((bool) (((bool) ((guid239).id() == ((uint8_t) 0))) && true)))) {
                 juniper::quit<juniper::unit>();
             }
-            void * p = (guid232).characterstic();
+            void * p = (guid239).characterstic();
             
             return (([&]() -> juniper::unit {
                 ((BLECharacteristic *) p)->setProperties(propN);
@@ -9178,11 +9797,11 @@ namespace Ble {
 namespace Ble {
     juniper::unit setCharacteristicFixedLen(Ble::characterstict c, uint32_t size) {
         return (([&]() -> juniper::unit {
-            Ble::characterstict guid233 = c;
-            if (!(((bool) (((bool) ((guid233).id() == ((uint8_t) 0))) && true)))) {
+            Ble::characterstict guid240 = c;
+            if (!(((bool) (((bool) ((guid240).id() == ((uint8_t) 0))) && true)))) {
                 juniper::quit<juniper::unit>();
             }
-            void * p = (guid233).characterstic();
+            void * p = (guid240).characterstic();
             
             return (([&]() -> juniper::unit {
                 ((BLECharacteristic *) p)->setFixedLen(size);
@@ -9231,11 +9850,11 @@ namespace Ble {
 namespace Ble {
     juniper::unit bluefruitAdvertisingAddFlags(Ble::advertisingFlagt flag) {
         return (([&]() -> juniper::unit {
-            Ble::advertisingFlagt guid234 = flag;
-            if (!(((bool) (((bool) ((guid234).id() == ((uint8_t) 0))) && true)))) {
+            Ble::advertisingFlagt guid241 = flag;
+            if (!(((bool) (((bool) ((guid241).id() == ((uint8_t) 0))) && true)))) {
                 juniper::quit<juniper::unit>();
             }
-            uint8_t flagNum = (guid234).advertisingFlag();
+            uint8_t flagNum = (guid241).advertisingFlag();
             
             return (([&]() -> juniper::unit {
                 Bluefruit.Advertising.addFlags(flagNum);
@@ -9257,11 +9876,11 @@ namespace Ble {
 namespace Ble {
     juniper::unit bluefruitAdvertisingAddAppearance(Ble::appearancet app) {
         return (([&]() -> juniper::unit {
-            Ble::appearancet guid235 = app;
-            if (!(((bool) (((bool) ((guid235).id() == ((uint8_t) 0))) && true)))) {
+            Ble::appearancet guid242 = app;
+            if (!(((bool) (((bool) ((guid242).id() == ((uint8_t) 0))) && true)))) {
                 juniper::quit<juniper::unit>();
             }
-            uint16_t flagNum = (guid235).appearance();
+            uint16_t flagNum = (guid242).appearance();
             
             return (([&]() -> juniper::unit {
                 Bluefruit.Advertising.addAppearance(flagNum);
@@ -9274,11 +9893,11 @@ namespace Ble {
 namespace Ble {
     juniper::unit bluefruitAdvertisingAddService(Ble::servicet serv) {
         return (([&]() -> juniper::unit {
-            Ble::servicet guid236 = serv;
-            if (!(((bool) (((bool) ((guid236).id() == ((uint8_t) 0))) && true)))) {
+            Ble::servicet guid243 = serv;
+            if (!(((bool) (((bool) ((guid243).id() == ((uint8_t) 0))) && true)))) {
                 juniper::quit<juniper::unit>();
             }
-            void * p = (guid236).service();
+            void * p = (guid243).service();
             
             return (([&]() -> juniper::unit {
                 Bluefruit.Advertising.addService(*((BLEService *) p));
@@ -9370,8 +9989,32 @@ namespace CWatch {
 }
 
 namespace CWatch {
+    juniper::rcptr test() {
+        return (([&]() -> juniper::rcptr {
+            void * myPtr;
+            
+            (([&]() -> juniper::unit {
+                myPtr = (void *) new int(10);
+                return {};
+            })());
+            return makerc(myPtr, juniper::function<void, juniper::unit(void *)>([](void * p) -> juniper::unit { 
+                return (([&]() -> juniper::unit {
+                    delete ((int *) p);
+                    return {};
+                })());
+             }));
+        })());
+    }
+}
+
+namespace CWatch {
+    juniper::refcell<uint32_t> foo = (juniper::refcell<uint32_t>(((uint32_t) 0)));
+}
+
+namespace CWatch {
     juniper::unit setup() {
         return (([&]() -> juniper::unit {
+            (*((foo).get()) = ((uint32_t) 10));
             Arcada::arcadaBegin();
             Arcada::displayBegin();
             Arcada::setBacklight(((uint8_t) 255));
@@ -9411,21 +10054,21 @@ namespace CWatch {
 
 namespace CWatch {
     juniper::records::recordt_3<uint8_t, uint8_t, uint8_t> pink = (([]() -> juniper::records::recordt_3<uint8_t, uint8_t, uint8_t>{
-        juniper::records::recordt_3<uint8_t, uint8_t, uint8_t> guid237;
-        guid237.r = ((uint8_t) 252);
-        guid237.g = ((uint8_t) 92);
-        guid237.b = ((uint8_t) 125);
-        return guid237;
+        juniper::records::recordt_3<uint8_t, uint8_t, uint8_t> guid244;
+        guid244.r = ((uint8_t) 252);
+        guid244.g = ((uint8_t) 92);
+        guid244.b = ((uint8_t) 125);
+        return guid244;
     })());
 }
 
 namespace CWatch {
     juniper::records::recordt_3<uint8_t, uint8_t, uint8_t> purpleBlue = (([]() -> juniper::records::recordt_3<uint8_t, uint8_t, uint8_t>{
-        juniper::records::recordt_3<uint8_t, uint8_t, uint8_t> guid238;
-        guid238.r = ((uint8_t) 106);
-        guid238.g = ((uint8_t) 130);
-        guid238.b = ((uint8_t) 251);
-        return guid238;
+        juniper::records::recordt_3<uint8_t, uint8_t, uint8_t> guid245;
+        guid245.r = ((uint8_t) 106);
+        guid245.g = ((uint8_t) 130);
+        guid245.b = ((uint8_t) 251);
+        return guid245;
     })());
 }
 
@@ -9447,13 +10090,13 @@ namespace CWatch {
 namespace CWatch {
     uint8_t daysInMonth(uint32_t y, CWatch::month m) {
         return (([&]() -> uint8_t {
-            CWatch::month guid239 = m;
-            return (((bool) (((bool) ((guid239).id() == ((uint8_t) 0))) && true)) ? 
+            CWatch::month guid246 = m;
+            return (((bool) (((bool) ((guid246).id() == ((uint8_t) 0))) && true)) ? 
                 (([&]() -> uint8_t {
                     return ((uint8_t) 31);
                 })())
             :
-                (((bool) (((bool) ((guid239).id() == ((uint8_t) 1))) && true)) ? 
+                (((bool) (((bool) ((guid246).id() == ((uint8_t) 1))) && true)) ? 
                     (([&]() -> uint8_t {
                         return (isLeapYear(y) ? 
                             ((uint8_t) 29)
@@ -9461,52 +10104,52 @@ namespace CWatch {
                             ((uint8_t) 28));
                     })())
                 :
-                    (((bool) (((bool) ((guid239).id() == ((uint8_t) 2))) && true)) ? 
+                    (((bool) (((bool) ((guid246).id() == ((uint8_t) 2))) && true)) ? 
                         (([&]() -> uint8_t {
                             return ((uint8_t) 31);
                         })())
                     :
-                        (((bool) (((bool) ((guid239).id() == ((uint8_t) 3))) && true)) ? 
+                        (((bool) (((bool) ((guid246).id() == ((uint8_t) 3))) && true)) ? 
                             (([&]() -> uint8_t {
                                 return ((uint8_t) 30);
                             })())
                         :
-                            (((bool) (((bool) ((guid239).id() == ((uint8_t) 4))) && true)) ? 
+                            (((bool) (((bool) ((guid246).id() == ((uint8_t) 4))) && true)) ? 
                                 (([&]() -> uint8_t {
                                     return ((uint8_t) 31);
                                 })())
                             :
-                                (((bool) (((bool) ((guid239).id() == ((uint8_t) 5))) && true)) ? 
+                                (((bool) (((bool) ((guid246).id() == ((uint8_t) 5))) && true)) ? 
                                     (([&]() -> uint8_t {
                                         return ((uint8_t) 30);
                                     })())
                                 :
-                                    (((bool) (((bool) ((guid239).id() == ((uint8_t) 6))) && true)) ? 
+                                    (((bool) (((bool) ((guid246).id() == ((uint8_t) 6))) && true)) ? 
                                         (([&]() -> uint8_t {
                                             return ((uint8_t) 31);
                                         })())
                                     :
-                                        (((bool) (((bool) ((guid239).id() == ((uint8_t) 7))) && true)) ? 
+                                        (((bool) (((bool) ((guid246).id() == ((uint8_t) 7))) && true)) ? 
                                             (([&]() -> uint8_t {
                                                 return ((uint8_t) 31);
                                             })())
                                         :
-                                            (((bool) (((bool) ((guid239).id() == ((uint8_t) 8))) && true)) ? 
+                                            (((bool) (((bool) ((guid246).id() == ((uint8_t) 8))) && true)) ? 
                                                 (([&]() -> uint8_t {
                                                     return ((uint8_t) 30);
                                                 })())
                                             :
-                                                (((bool) (((bool) ((guid239).id() == ((uint8_t) 9))) && true)) ? 
+                                                (((bool) (((bool) ((guid246).id() == ((uint8_t) 9))) && true)) ? 
                                                     (([&]() -> uint8_t {
                                                         return ((uint8_t) 31);
                                                     })())
                                                 :
-                                                    (((bool) (((bool) ((guid239).id() == ((uint8_t) 10))) && true)) ? 
+                                                    (((bool) (((bool) ((guid246).id() == ((uint8_t) 10))) && true)) ? 
                                                         (([&]() -> uint8_t {
                                                             return ((uint8_t) 30);
                                                         })())
                                                     :
-                                                        (((bool) (((bool) ((guid239).id() == ((uint8_t) 11))) && true)) ? 
+                                                        (((bool) (((bool) ((guid246).id() == ((uint8_t) 11))) && true)) ? 
                                                             (([&]() -> uint8_t {
                                                                 return ((uint8_t) 31);
                                                             })())
@@ -9519,48 +10162,48 @@ namespace CWatch {
 namespace CWatch {
     CWatch::month nextMonth(CWatch::month m) {
         return (([&]() -> CWatch::month {
-            CWatch::month guid240 = m;
-            return (((bool) (((bool) ((guid240).id() == ((uint8_t) 0))) && true)) ? 
+            CWatch::month guid247 = m;
+            return (((bool) (((bool) ((guid247).id() == ((uint8_t) 0))) && true)) ? 
                 (([&]() -> CWatch::month {
                     return february();
                 })())
             :
-                (((bool) (((bool) ((guid240).id() == ((uint8_t) 1))) && true)) ? 
+                (((bool) (((bool) ((guid247).id() == ((uint8_t) 1))) && true)) ? 
                     (([&]() -> CWatch::month {
                         return march();
                     })())
                 :
-                    (((bool) (((bool) ((guid240).id() == ((uint8_t) 2))) && true)) ? 
+                    (((bool) (((bool) ((guid247).id() == ((uint8_t) 2))) && true)) ? 
                         (([&]() -> CWatch::month {
                             return april();
                         })())
                     :
-                        (((bool) (((bool) ((guid240).id() == ((uint8_t) 4))) && true)) ? 
+                        (((bool) (((bool) ((guid247).id() == ((uint8_t) 4))) && true)) ? 
                             (([&]() -> CWatch::month {
                                 return june();
                             })())
                         :
-                            (((bool) (((bool) ((guid240).id() == ((uint8_t) 5))) && true)) ? 
+                            (((bool) (((bool) ((guid247).id() == ((uint8_t) 5))) && true)) ? 
                                 (([&]() -> CWatch::month {
                                     return july();
                                 })())
                             :
-                                (((bool) (((bool) ((guid240).id() == ((uint8_t) 7))) && true)) ? 
+                                (((bool) (((bool) ((guid247).id() == ((uint8_t) 7))) && true)) ? 
                                     (([&]() -> CWatch::month {
                                         return august();
                                     })())
                                 :
-                                    (((bool) (((bool) ((guid240).id() == ((uint8_t) 8))) && true)) ? 
+                                    (((bool) (((bool) ((guid247).id() == ((uint8_t) 8))) && true)) ? 
                                         (([&]() -> CWatch::month {
                                             return october();
                                         })())
                                     :
-                                        (((bool) (((bool) ((guid240).id() == ((uint8_t) 9))) && true)) ? 
+                                        (((bool) (((bool) ((guid247).id() == ((uint8_t) 9))) && true)) ? 
                                             (([&]() -> CWatch::month {
                                                 return november();
                                             })())
                                         :
-                                            (((bool) (((bool) ((guid240).id() == ((uint8_t) 11))) && true)) ? 
+                                            (((bool) (((bool) ((guid247).id() == ((uint8_t) 11))) && true)) ? 
                                                 (([&]() -> CWatch::month {
                                                     return january();
                                                 })())
@@ -9573,38 +10216,38 @@ namespace CWatch {
 namespace CWatch {
     CWatch::dayOfWeek nextDayOfWeek(CWatch::dayOfWeek dw) {
         return (([&]() -> CWatch::dayOfWeek {
-            CWatch::dayOfWeek guid241 = dw;
-            return (((bool) (((bool) ((guid241).id() == ((uint8_t) 0))) && true)) ? 
+            CWatch::dayOfWeek guid248 = dw;
+            return (((bool) (((bool) ((guid248).id() == ((uint8_t) 0))) && true)) ? 
                 (([&]() -> CWatch::dayOfWeek {
                     return monday();
                 })())
             :
-                (((bool) (((bool) ((guid241).id() == ((uint8_t) 1))) && true)) ? 
+                (((bool) (((bool) ((guid248).id() == ((uint8_t) 1))) && true)) ? 
                     (([&]() -> CWatch::dayOfWeek {
                         return tuesday();
                     })())
                 :
-                    (((bool) (((bool) ((guid241).id() == ((uint8_t) 2))) && true)) ? 
+                    (((bool) (((bool) ((guid248).id() == ((uint8_t) 2))) && true)) ? 
                         (([&]() -> CWatch::dayOfWeek {
                             return wednesday();
                         })())
                     :
-                        (((bool) (((bool) ((guid241).id() == ((uint8_t) 3))) && true)) ? 
+                        (((bool) (((bool) ((guid248).id() == ((uint8_t) 3))) && true)) ? 
                             (([&]() -> CWatch::dayOfWeek {
                                 return thursday();
                             })())
                         :
-                            (((bool) (((bool) ((guid241).id() == ((uint8_t) 4))) && true)) ? 
+                            (((bool) (((bool) ((guid248).id() == ((uint8_t) 4))) && true)) ? 
                                 (([&]() -> CWatch::dayOfWeek {
                                     return friday();
                                 })())
                             :
-                                (((bool) (((bool) ((guid241).id() == ((uint8_t) 5))) && true)) ? 
+                                (((bool) (((bool) ((guid248).id() == ((uint8_t) 5))) && true)) ? 
                                     (([&]() -> CWatch::dayOfWeek {
                                         return saturday();
                                     })())
                                 :
-                                    (((bool) (((bool) ((guid241).id() == ((uint8_t) 6))) && true)) ? 
+                                    (((bool) (((bool) ((guid248).id() == ((uint8_t) 6))) && true)) ? 
                                         (([&]() -> CWatch::dayOfWeek {
                                             return sunday();
                                         })())
@@ -9617,74 +10260,74 @@ namespace CWatch {
 namespace CWatch {
     juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t> dayOfWeekToCharList(CWatch::dayOfWeek dw) {
         return (([&]() -> juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t> {
-            CWatch::dayOfWeek guid242 = dw;
-            return (((bool) (((bool) ((guid242).id() == ((uint8_t) 0))) && true)) ? 
+            CWatch::dayOfWeek guid249 = dw;
+            return (((bool) (((bool) ((guid249).id() == ((uint8_t) 0))) && true)) ? 
                 (([&]() -> juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t> {
                     return (([&]() -> juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t>{
-                        juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t> guid243;
-                        guid243.data = (juniper::array<uint8_t, 4> { {((uint8_t) 83), ((uint8_t) 117), ((uint8_t) 110), ((uint8_t) 0)} });
-                        guid243.length = ((uint32_t) 4);
-                        return guid243;
+                        juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t> guid250;
+                        guid250.data = (juniper::array<uint8_t, 4> { {((uint8_t) 83), ((uint8_t) 117), ((uint8_t) 110), ((uint8_t) 0)} });
+                        guid250.length = ((uint32_t) 4);
+                        return guid250;
                     })());
                 })())
             :
-                (((bool) (((bool) ((guid242).id() == ((uint8_t) 1))) && true)) ? 
+                (((bool) (((bool) ((guid249).id() == ((uint8_t) 1))) && true)) ? 
                     (([&]() -> juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t> {
                         return (([&]() -> juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t>{
-                            juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t> guid244;
-                            guid244.data = (juniper::array<uint8_t, 4> { {((uint8_t) 77), ((uint8_t) 111), ((uint8_t) 110), ((uint8_t) 0)} });
-                            guid244.length = ((uint32_t) 4);
-                            return guid244;
+                            juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t> guid251;
+                            guid251.data = (juniper::array<uint8_t, 4> { {((uint8_t) 77), ((uint8_t) 111), ((uint8_t) 110), ((uint8_t) 0)} });
+                            guid251.length = ((uint32_t) 4);
+                            return guid251;
                         })());
                     })())
                 :
-                    (((bool) (((bool) ((guid242).id() == ((uint8_t) 2))) && true)) ? 
+                    (((bool) (((bool) ((guid249).id() == ((uint8_t) 2))) && true)) ? 
                         (([&]() -> juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t> {
                             return (([&]() -> juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t>{
-                                juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t> guid245;
-                                guid245.data = (juniper::array<uint8_t, 4> { {((uint8_t) 84), ((uint8_t) 117), ((uint8_t) 101), ((uint8_t) 0)} });
-                                guid245.length = ((uint32_t) 4);
-                                return guid245;
+                                juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t> guid252;
+                                guid252.data = (juniper::array<uint8_t, 4> { {((uint8_t) 84), ((uint8_t) 117), ((uint8_t) 101), ((uint8_t) 0)} });
+                                guid252.length = ((uint32_t) 4);
+                                return guid252;
                             })());
                         })())
                     :
-                        (((bool) (((bool) ((guid242).id() == ((uint8_t) 3))) && true)) ? 
+                        (((bool) (((bool) ((guid249).id() == ((uint8_t) 3))) && true)) ? 
                             (([&]() -> juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t> {
                                 return (([&]() -> juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t>{
-                                    juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t> guid246;
-                                    guid246.data = (juniper::array<uint8_t, 4> { {((uint8_t) 87), ((uint8_t) 101), ((uint8_t) 100), ((uint8_t) 0)} });
-                                    guid246.length = ((uint32_t) 4);
-                                    return guid246;
+                                    juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t> guid253;
+                                    guid253.data = (juniper::array<uint8_t, 4> { {((uint8_t) 87), ((uint8_t) 101), ((uint8_t) 100), ((uint8_t) 0)} });
+                                    guid253.length = ((uint32_t) 4);
+                                    return guid253;
                                 })());
                             })())
                         :
-                            (((bool) (((bool) ((guid242).id() == ((uint8_t) 4))) && true)) ? 
+                            (((bool) (((bool) ((guid249).id() == ((uint8_t) 4))) && true)) ? 
                                 (([&]() -> juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t> {
                                     return (([&]() -> juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t>{
-                                        juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t> guid247;
-                                        guid247.data = (juniper::array<uint8_t, 4> { {((uint8_t) 84), ((uint8_t) 104), ((uint8_t) 117), ((uint8_t) 0)} });
-                                        guid247.length = ((uint32_t) 4);
-                                        return guid247;
+                                        juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t> guid254;
+                                        guid254.data = (juniper::array<uint8_t, 4> { {((uint8_t) 84), ((uint8_t) 104), ((uint8_t) 117), ((uint8_t) 0)} });
+                                        guid254.length = ((uint32_t) 4);
+                                        return guid254;
                                     })());
                                 })())
                             :
-                                (((bool) (((bool) ((guid242).id() == ((uint8_t) 5))) && true)) ? 
+                                (((bool) (((bool) ((guid249).id() == ((uint8_t) 5))) && true)) ? 
                                     (([&]() -> juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t> {
                                         return (([&]() -> juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t>{
-                                            juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t> guid248;
-                                            guid248.data = (juniper::array<uint8_t, 4> { {((uint8_t) 70), ((uint8_t) 114), ((uint8_t) 105), ((uint8_t) 0)} });
-                                            guid248.length = ((uint32_t) 4);
-                                            return guid248;
+                                            juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t> guid255;
+                                            guid255.data = (juniper::array<uint8_t, 4> { {((uint8_t) 70), ((uint8_t) 114), ((uint8_t) 105), ((uint8_t) 0)} });
+                                            guid255.length = ((uint32_t) 4);
+                                            return guid255;
                                         })());
                                     })())
                                 :
-                                    (((bool) (((bool) ((guid242).id() == ((uint8_t) 6))) && true)) ? 
+                                    (((bool) (((bool) ((guid249).id() == ((uint8_t) 6))) && true)) ? 
                                         (([&]() -> juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t> {
                                             return (([&]() -> juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t>{
-                                                juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t> guid249;
-                                                guid249.data = (juniper::array<uint8_t, 4> { {((uint8_t) 83), ((uint8_t) 97), ((uint8_t) 116), ((uint8_t) 0)} });
-                                                guid249.length = ((uint32_t) 4);
-                                                return guid249;
+                                                juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t> guid256;
+                                                guid256.data = (juniper::array<uint8_t, 4> { {((uint8_t) 83), ((uint8_t) 97), ((uint8_t) 116), ((uint8_t) 0)} });
+                                                guid256.length = ((uint32_t) 4);
+                                                return guid256;
                                             })());
                                         })())
                                     :
@@ -9696,124 +10339,124 @@ namespace CWatch {
 namespace CWatch {
     juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t> monthToCharList(CWatch::month m) {
         return (([&]() -> juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t> {
-            CWatch::month guid250 = m;
-            return (((bool) (((bool) ((guid250).id() == ((uint8_t) 0))) && true)) ? 
+            CWatch::month guid257 = m;
+            return (((bool) (((bool) ((guid257).id() == ((uint8_t) 0))) && true)) ? 
                 (([&]() -> juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t> {
                     return (([&]() -> juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t>{
-                        juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t> guid251;
-                        guid251.data = (juniper::array<uint8_t, 4> { {((uint8_t) 74), ((uint8_t) 97), ((uint8_t) 110), ((uint8_t) 0)} });
-                        guid251.length = ((uint32_t) 4);
-                        return guid251;
+                        juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t> guid258;
+                        guid258.data = (juniper::array<uint8_t, 4> { {((uint8_t) 74), ((uint8_t) 97), ((uint8_t) 110), ((uint8_t) 0)} });
+                        guid258.length = ((uint32_t) 4);
+                        return guid258;
                     })());
                 })())
             :
-                (((bool) (((bool) ((guid250).id() == ((uint8_t) 1))) && true)) ? 
+                (((bool) (((bool) ((guid257).id() == ((uint8_t) 1))) && true)) ? 
                     (([&]() -> juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t> {
                         return (([&]() -> juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t>{
-                            juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t> guid252;
-                            guid252.data = (juniper::array<uint8_t, 4> { {((uint8_t) 70), ((uint8_t) 101), ((uint8_t) 98), ((uint8_t) 0)} });
-                            guid252.length = ((uint32_t) 4);
-                            return guid252;
+                            juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t> guid259;
+                            guid259.data = (juniper::array<uint8_t, 4> { {((uint8_t) 70), ((uint8_t) 101), ((uint8_t) 98), ((uint8_t) 0)} });
+                            guid259.length = ((uint32_t) 4);
+                            return guid259;
                         })());
                     })())
                 :
-                    (((bool) (((bool) ((guid250).id() == ((uint8_t) 2))) && true)) ? 
+                    (((bool) (((bool) ((guid257).id() == ((uint8_t) 2))) && true)) ? 
                         (([&]() -> juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t> {
                             return (([&]() -> juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t>{
-                                juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t> guid253;
-                                guid253.data = (juniper::array<uint8_t, 4> { {((uint8_t) 77), ((uint8_t) 97), ((uint8_t) 114), ((uint8_t) 0)} });
-                                guid253.length = ((uint32_t) 4);
-                                return guid253;
+                                juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t> guid260;
+                                guid260.data = (juniper::array<uint8_t, 4> { {((uint8_t) 77), ((uint8_t) 97), ((uint8_t) 114), ((uint8_t) 0)} });
+                                guid260.length = ((uint32_t) 4);
+                                return guid260;
                             })());
                         })())
                     :
-                        (((bool) (((bool) ((guid250).id() == ((uint8_t) 3))) && true)) ? 
+                        (((bool) (((bool) ((guid257).id() == ((uint8_t) 3))) && true)) ? 
                             (([&]() -> juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t> {
                                 return (([&]() -> juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t>{
-                                    juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t> guid254;
-                                    guid254.data = (juniper::array<uint8_t, 4> { {((uint8_t) 65), ((uint8_t) 112), ((uint8_t) 114), ((uint8_t) 0)} });
-                                    guid254.length = ((uint32_t) 4);
-                                    return guid254;
+                                    juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t> guid261;
+                                    guid261.data = (juniper::array<uint8_t, 4> { {((uint8_t) 65), ((uint8_t) 112), ((uint8_t) 114), ((uint8_t) 0)} });
+                                    guid261.length = ((uint32_t) 4);
+                                    return guid261;
                                 })());
                             })())
                         :
-                            (((bool) (((bool) ((guid250).id() == ((uint8_t) 4))) && true)) ? 
+                            (((bool) (((bool) ((guid257).id() == ((uint8_t) 4))) && true)) ? 
                                 (([&]() -> juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t> {
                                     return (([&]() -> juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t>{
-                                        juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t> guid255;
-                                        guid255.data = (juniper::array<uint8_t, 4> { {((uint8_t) 77), ((uint8_t) 97), ((uint8_t) 121), ((uint8_t) 0)} });
-                                        guid255.length = ((uint32_t) 4);
-                                        return guid255;
+                                        juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t> guid262;
+                                        guid262.data = (juniper::array<uint8_t, 4> { {((uint8_t) 77), ((uint8_t) 97), ((uint8_t) 121), ((uint8_t) 0)} });
+                                        guid262.length = ((uint32_t) 4);
+                                        return guid262;
                                     })());
                                 })())
                             :
-                                (((bool) (((bool) ((guid250).id() == ((uint8_t) 5))) && true)) ? 
+                                (((bool) (((bool) ((guid257).id() == ((uint8_t) 5))) && true)) ? 
                                     (([&]() -> juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t> {
                                         return (([&]() -> juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t>{
-                                            juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t> guid256;
-                                            guid256.data = (juniper::array<uint8_t, 4> { {((uint8_t) 74), ((uint8_t) 117), ((uint8_t) 110), ((uint8_t) 0)} });
-                                            guid256.length = ((uint32_t) 4);
-                                            return guid256;
+                                            juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t> guid263;
+                                            guid263.data = (juniper::array<uint8_t, 4> { {((uint8_t) 74), ((uint8_t) 117), ((uint8_t) 110), ((uint8_t) 0)} });
+                                            guid263.length = ((uint32_t) 4);
+                                            return guid263;
                                         })());
                                     })())
                                 :
-                                    (((bool) (((bool) ((guid250).id() == ((uint8_t) 6))) && true)) ? 
+                                    (((bool) (((bool) ((guid257).id() == ((uint8_t) 6))) && true)) ? 
                                         (([&]() -> juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t> {
                                             return (([&]() -> juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t>{
-                                                juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t> guid257;
-                                                guid257.data = (juniper::array<uint8_t, 4> { {((uint8_t) 74), ((uint8_t) 117), ((uint8_t) 108), ((uint8_t) 0)} });
-                                                guid257.length = ((uint32_t) 4);
-                                                return guid257;
+                                                juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t> guid264;
+                                                guid264.data = (juniper::array<uint8_t, 4> { {((uint8_t) 74), ((uint8_t) 117), ((uint8_t) 108), ((uint8_t) 0)} });
+                                                guid264.length = ((uint32_t) 4);
+                                                return guid264;
                                             })());
                                         })())
                                     :
-                                        (((bool) (((bool) ((guid250).id() == ((uint8_t) 7))) && true)) ? 
+                                        (((bool) (((bool) ((guid257).id() == ((uint8_t) 7))) && true)) ? 
                                             (([&]() -> juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t> {
                                                 return (([&]() -> juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t>{
-                                                    juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t> guid258;
-                                                    guid258.data = (juniper::array<uint8_t, 4> { {((uint8_t) 65), ((uint8_t) 117), ((uint8_t) 103), ((uint8_t) 0)} });
-                                                    guid258.length = ((uint32_t) 4);
-                                                    return guid258;
+                                                    juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t> guid265;
+                                                    guid265.data = (juniper::array<uint8_t, 4> { {((uint8_t) 65), ((uint8_t) 117), ((uint8_t) 103), ((uint8_t) 0)} });
+                                                    guid265.length = ((uint32_t) 4);
+                                                    return guid265;
                                                 })());
                                             })())
                                         :
-                                            (((bool) (((bool) ((guid250).id() == ((uint8_t) 8))) && true)) ? 
+                                            (((bool) (((bool) ((guid257).id() == ((uint8_t) 8))) && true)) ? 
                                                 (([&]() -> juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t> {
                                                     return (([&]() -> juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t>{
-                                                        juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t> guid259;
-                                                        guid259.data = (juniper::array<uint8_t, 4> { {((uint8_t) 83), ((uint8_t) 101), ((uint8_t) 112), ((uint8_t) 0)} });
-                                                        guid259.length = ((uint32_t) 4);
-                                                        return guid259;
+                                                        juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t> guid266;
+                                                        guid266.data = (juniper::array<uint8_t, 4> { {((uint8_t) 83), ((uint8_t) 101), ((uint8_t) 112), ((uint8_t) 0)} });
+                                                        guid266.length = ((uint32_t) 4);
+                                                        return guid266;
                                                     })());
                                                 })())
                                             :
-                                                (((bool) (((bool) ((guid250).id() == ((uint8_t) 9))) && true)) ? 
+                                                (((bool) (((bool) ((guid257).id() == ((uint8_t) 9))) && true)) ? 
                                                     (([&]() -> juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t> {
                                                         return (([&]() -> juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t>{
-                                                            juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t> guid260;
-                                                            guid260.data = (juniper::array<uint8_t, 4> { {((uint8_t) 79), ((uint8_t) 99), ((uint8_t) 116), ((uint8_t) 0)} });
-                                                            guid260.length = ((uint32_t) 4);
-                                                            return guid260;
+                                                            juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t> guid267;
+                                                            guid267.data = (juniper::array<uint8_t, 4> { {((uint8_t) 79), ((uint8_t) 99), ((uint8_t) 116), ((uint8_t) 0)} });
+                                                            guid267.length = ((uint32_t) 4);
+                                                            return guid267;
                                                         })());
                                                     })())
                                                 :
-                                                    (((bool) (((bool) ((guid250).id() == ((uint8_t) 10))) && true)) ? 
+                                                    (((bool) (((bool) ((guid257).id() == ((uint8_t) 10))) && true)) ? 
                                                         (([&]() -> juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t> {
                                                             return (([&]() -> juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t>{
-                                                                juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t> guid261;
-                                                                guid261.data = (juniper::array<uint8_t, 4> { {((uint8_t) 78), ((uint8_t) 111), ((uint8_t) 118), ((uint8_t) 0)} });
-                                                                guid261.length = ((uint32_t) 4);
-                                                                return guid261;
+                                                                juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t> guid268;
+                                                                guid268.data = (juniper::array<uint8_t, 4> { {((uint8_t) 78), ((uint8_t) 111), ((uint8_t) 118), ((uint8_t) 0)} });
+                                                                guid268.length = ((uint32_t) 4);
+                                                                return guid268;
                                                             })());
                                                         })())
                                                     :
-                                                        (((bool) (((bool) ((guid250).id() == ((uint8_t) 11))) && true)) ? 
+                                                        (((bool) (((bool) ((guid257).id() == ((uint8_t) 11))) && true)) ? 
                                                             (([&]() -> juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t> {
                                                                 return (([&]() -> juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t>{
-                                                                    juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t> guid262;
-                                                                    guid262.data = (juniper::array<uint8_t, 4> { {((uint8_t) 68), ((uint8_t) 101), ((uint8_t) 99), ((uint8_t) 0)} });
-                                                                    guid262.length = ((uint32_t) 4);
-                                                                    return guid262;
+                                                                    juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t> guid269;
+                                                                    guid269.data = (juniper::array<uint8_t, 4> { {((uint8_t) 68), ((uint8_t) 101), ((uint8_t) 99), ((uint8_t) 0)} });
+                                                                    guid269.length = ((uint32_t) 4);
+                                                                    return guid269;
                                                                 })());
                                                             })())
                                                         :
@@ -9825,65 +10468,65 @@ namespace CWatch {
 namespace CWatch {
     juniper::records::recordt_9<uint8_t, CWatch::dayOfWeek, uint8_t, uint8_t, CWatch::month, uint8_t, uint32_t> secondTick(juniper::records::recordt_9<uint8_t, CWatch::dayOfWeek, uint8_t, uint8_t, CWatch::month, uint8_t, uint32_t> d) {
         return (([&]() -> juniper::records::recordt_9<uint8_t, CWatch::dayOfWeek, uint8_t, uint8_t, CWatch::month, uint8_t, uint32_t> {
-            juniper::records::recordt_9<uint8_t, CWatch::dayOfWeek, uint8_t, uint8_t, CWatch::month, uint8_t, uint32_t> guid263 = d;
+            juniper::records::recordt_9<uint8_t, CWatch::dayOfWeek, uint8_t, uint8_t, CWatch::month, uint8_t, uint32_t> guid270 = d;
             if (!(true)) {
                 juniper::quit<juniper::unit>();
             }
-            CWatch::dayOfWeek dayOfWeek = (guid263).dayOfWeek;
-            uint8_t seconds = (guid263).seconds;
-            uint8_t minutes = (guid263).minutes;
-            uint8_t hours = (guid263).hours;
-            uint32_t year = (guid263).year;
-            uint8_t day = (guid263).day;
-            CWatch::month month = (guid263).month;
+            CWatch::dayOfWeek dayOfWeek = (guid270).dayOfWeek;
+            uint8_t seconds = (guid270).seconds;
+            uint8_t minutes = (guid270).minutes;
+            uint8_t hours = (guid270).hours;
+            uint32_t year = (guid270).year;
+            uint8_t day = (guid270).day;
+            CWatch::month month = (guid270).month;
             
-            uint8_t guid264 = ((uint8_t) (seconds + ((uint8_t) 1)));
+            uint8_t guid271 = ((uint8_t) (seconds + ((uint8_t) 1)));
             if (!(true)) {
                 juniper::quit<juniper::unit>();
             }
-            uint8_t seconds1 = guid264;
+            uint8_t seconds1 = guid271;
             
-            juniper::tuple2<uint8_t, uint8_t> guid265 = (((bool) (seconds1 == ((uint8_t) 60))) ? 
+            juniper::tuple2<uint8_t, uint8_t> guid272 = (((bool) (seconds1 == ((uint8_t) 60))) ? 
                 (juniper::tuple2<uint8_t,uint8_t>{((uint8_t) 0), ((uint8_t) (minutes + ((uint8_t) 1)))})
             :
                 (juniper::tuple2<uint8_t,uint8_t>{seconds1, minutes}));
             if (!(true)) {
                 juniper::quit<juniper::unit>();
             }
-            uint8_t minutes1 = (guid265).e2;
-            uint8_t seconds2 = (guid265).e1;
+            uint8_t minutes1 = (guid272).e2;
+            uint8_t seconds2 = (guid272).e1;
             
-            juniper::tuple2<uint8_t, uint8_t> guid266 = (((bool) (minutes1 == ((uint8_t) 60))) ? 
+            juniper::tuple2<uint8_t, uint8_t> guid273 = (((bool) (minutes1 == ((uint8_t) 60))) ? 
                 (juniper::tuple2<uint8_t,uint8_t>{((uint8_t) 0), ((uint8_t) (hours + ((uint8_t) 1)))})
             :
                 (juniper::tuple2<uint8_t,uint8_t>{minutes1, hours}));
             if (!(true)) {
                 juniper::quit<juniper::unit>();
             }
-            uint8_t hours1 = (guid266).e2;
-            uint8_t minutes2 = (guid266).e1;
+            uint8_t hours1 = (guid273).e2;
+            uint8_t minutes2 = (guid273).e1;
             
-            juniper::tuple3<uint8_t, uint8_t, CWatch::dayOfWeek> guid267 = (((bool) (hours1 == ((uint8_t) 24))) ? 
+            juniper::tuple3<uint8_t, uint8_t, CWatch::dayOfWeek> guid274 = (((bool) (hours1 == ((uint8_t) 24))) ? 
                 (juniper::tuple3<uint8_t,uint8_t,CWatch::dayOfWeek>{((uint8_t) 0), ((uint8_t) (day + ((uint8_t) 1))), nextDayOfWeek(dayOfWeek)})
             :
                 (juniper::tuple3<uint8_t,uint8_t,CWatch::dayOfWeek>{hours1, day, dayOfWeek}));
             if (!(true)) {
                 juniper::quit<juniper::unit>();
             }
-            CWatch::dayOfWeek dayOfWeek2 = (guid267).e3;
-            uint8_t day1 = (guid267).e2;
-            uint8_t hours2 = (guid267).e1;
+            CWatch::dayOfWeek dayOfWeek2 = (guid274).e3;
+            uint8_t day1 = (guid274).e2;
+            uint8_t hours2 = (guid274).e1;
             
-            uint8_t guid268 = daysInMonth(year, month);
+            uint8_t guid275 = daysInMonth(year, month);
             if (!(true)) {
                 juniper::quit<juniper::unit>();
             }
-            uint8_t daysInCurrentMonth = guid268;
+            uint8_t daysInCurrentMonth = guid275;
             
-            juniper::tuple2<uint8_t, juniper::tuple2<CWatch::month, uint32_t>> guid269 = (((bool) (day1 > daysInCurrentMonth)) ? 
+            juniper::tuple2<uint8_t, juniper::tuple2<CWatch::month, uint32_t>> guid276 = (((bool) (day1 > daysInCurrentMonth)) ? 
                 (juniper::tuple2<uint8_t,juniper::tuple2<CWatch::month, uint32_t>>{((uint8_t) 1), (([&]() -> juniper::tuple2<CWatch::month, uint32_t> {
-                    CWatch::month guid270 = month;
-                    return (((bool) (((bool) ((guid270).id() == ((uint8_t) 11))) && true)) ? 
+                    CWatch::month guid277 = month;
+                    return (((bool) (((bool) ((guid277).id() == ((uint8_t) 11))) && true)) ? 
                         (([&]() -> juniper::tuple2<CWatch::month, uint32_t> {
                             return (juniper::tuple2<CWatch::month,uint32_t>{january(), ((uint32_t) (year + ((uint32_t) 1)))});
                         })())
@@ -9900,57 +10543,57 @@ namespace CWatch {
             if (!(true)) {
                 juniper::quit<juniper::unit>();
             }
-            uint32_t year2 = ((guid269).e2).e2;
-            CWatch::month month2 = ((guid269).e2).e1;
-            uint8_t day2 = (guid269).e1;
+            uint32_t year2 = ((guid276).e2).e2;
+            CWatch::month month2 = ((guid276).e2).e1;
+            uint8_t day2 = (guid276).e1;
             
             return (([&]() -> juniper::records::recordt_9<uint8_t, CWatch::dayOfWeek, uint8_t, uint8_t, CWatch::month, uint8_t, uint32_t>{
-                juniper::records::recordt_9<uint8_t, CWatch::dayOfWeek, uint8_t, uint8_t, CWatch::month, uint8_t, uint32_t> guid271;
-                guid271.month = month2;
-                guid271.day = day2;
-                guid271.year = year2;
-                guid271.hours = hours2;
-                guid271.minutes = minutes2;
-                guid271.seconds = seconds2;
-                guid271.dayOfWeek = dayOfWeek2;
-                return guid271;
+                juniper::records::recordt_9<uint8_t, CWatch::dayOfWeek, uint8_t, uint8_t, CWatch::month, uint8_t, uint32_t> guid278;
+                guid278.month = month2;
+                guid278.day = day2;
+                guid278.year = year2;
+                guid278.hours = hours2;
+                guid278.minutes = minutes2;
+                guid278.seconds = seconds2;
+                guid278.dayOfWeek = dayOfWeek2;
+                return guid278;
             })());
         })());
     }
 }
 
 namespace CWatch {
-    juniper::shared_ptr<juniper::records::recordt_1<uint32_t>> clockTickerState = Time::state();
+    juniper::records::recordt_1<uint32_t> clockTickerState = Time::state;
 }
 
 namespace CWatch {
-    juniper::shared_ptr<juniper::records::recordt_9<uint8_t, CWatch::dayOfWeek, uint8_t, uint8_t, CWatch::month, uint8_t, uint32_t>> clockState = (juniper::shared_ptr<juniper::records::recordt_9<uint8_t, CWatch::dayOfWeek, uint8_t, uint8_t, CWatch::month, uint8_t, uint32_t>>((([]() -> juniper::records::recordt_9<uint8_t, CWatch::dayOfWeek, uint8_t, uint8_t, CWatch::month, uint8_t, uint32_t>{
-        juniper::records::recordt_9<uint8_t, CWatch::dayOfWeek, uint8_t, uint8_t, CWatch::month, uint8_t, uint32_t> guid272;
-        guid272.month = september();
-        guid272.day = ((uint8_t) 9);
-        guid272.year = ((uint32_t) 2020);
-        guid272.hours = ((uint8_t) 18);
-        guid272.minutes = ((uint8_t) 40);
-        guid272.seconds = ((uint8_t) 0);
-        guid272.dayOfWeek = wednesday();
-        return guid272;
-    })())));
+    juniper::records::recordt_9<uint8_t, CWatch::dayOfWeek, uint8_t, uint8_t, CWatch::month, uint8_t, uint32_t> clockState = (([]() -> juniper::records::recordt_9<uint8_t, CWatch::dayOfWeek, uint8_t, uint8_t, CWatch::month, uint8_t, uint32_t>{
+        juniper::records::recordt_9<uint8_t, CWatch::dayOfWeek, uint8_t, uint8_t, CWatch::month, uint8_t, uint32_t> guid279;
+        guid279.month = september();
+        guid279.day = ((uint8_t) 9);
+        guid279.year = ((uint32_t) 2020);
+        guid279.hours = ((uint8_t) 18);
+        guid279.minutes = ((uint8_t) 40);
+        guid279.seconds = ((uint8_t) 0);
+        guid279.dayOfWeek = wednesday();
+        return guid279;
+    })());
 }
 
 namespace CWatch {
     juniper::unit processBluetoothUpdates() {
         return (([&]() -> juniper::unit {
-            bool guid273 = false;
+            bool guid280 = false;
             if (!(true)) {
                 juniper::quit<juniper::unit>();
             }
-            bool hasNewDayDateTime = guid273;
+            bool hasNewDayDateTime = guid280;
             
-            bool guid274 = false;
+            bool guid281 = false;
             if (!(true)) {
                 juniper::quit<juniper::unit>();
             }
-            bool hasNewDayOfWeek = guid274;
+            bool hasNewDayOfWeek = guid281;
             
             (([&]() -> juniper::unit {
                 
@@ -9967,70 +10610,70 @@ namespace CWatch {
             (([&]() -> juniper::unit {
                 if (hasNewDayDateTime) {
                     (([&]() -> uint8_t {
-                        juniper::records::recordt_7<uint8_t, uint8_t, uint32_t, uint8_t, uint8_t, uint8_t> guid275 = Ble::readGeneric<juniper::records::recordt_7<uint8_t, uint8_t, uint32_t, uint8_t, uint8_t, uint8_t>>(dayDateTimeCharacterstic);
+                        juniper::records::recordt_7<uint8_t, uint8_t, uint32_t, uint8_t, uint8_t, uint8_t> guid282 = Ble::readGeneric<juniper::records::recordt_7<uint8_t, uint8_t, uint32_t, uint8_t, uint8_t, uint8_t>>(dayDateTimeCharacterstic);
                         if (!(true)) {
                             juniper::quit<juniper::unit>();
                         }
-                        juniper::records::recordt_7<uint8_t, uint8_t, uint32_t, uint8_t, uint8_t, uint8_t> bleData = guid275;
+                        juniper::records::recordt_7<uint8_t, uint8_t, uint32_t, uint8_t, uint8_t, uint8_t> bleData = guid282;
                         
-                        (((clockState).get())->month = (([&]() -> CWatch::month {
-                            uint8_t guid276 = (bleData).month;
-                            return (((bool) (((bool) (guid276 == ((int32_t) 0))) && true)) ? 
+                        ((clockState).month = (([&]() -> CWatch::month {
+                            uint8_t guid283 = (bleData).month;
+                            return (((bool) (((bool) (guid283 == ((uint8_t) 0))) && true)) ? 
                                 (([&]() -> CWatch::month {
                                     return january();
                                 })())
                             :
-                                (((bool) (((bool) (guid276 == ((int32_t) 1))) && true)) ? 
+                                (((bool) (((bool) (guid283 == ((uint8_t) 1))) && true)) ? 
                                     (([&]() -> CWatch::month {
                                         return february();
                                     })())
                                 :
-                                    (((bool) (((bool) (guid276 == ((int32_t) 2))) && true)) ? 
+                                    (((bool) (((bool) (guid283 == ((uint8_t) 2))) && true)) ? 
                                         (([&]() -> CWatch::month {
                                             return march();
                                         })())
                                     :
-                                        (((bool) (((bool) (guid276 == ((int32_t) 3))) && true)) ? 
+                                        (((bool) (((bool) (guid283 == ((uint8_t) 3))) && true)) ? 
                                             (([&]() -> CWatch::month {
                                                 return april();
                                             })())
                                         :
-                                            (((bool) (((bool) (guid276 == ((int32_t) 4))) && true)) ? 
+                                            (((bool) (((bool) (guid283 == ((uint8_t) 4))) && true)) ? 
                                                 (([&]() -> CWatch::month {
                                                     return may();
                                                 })())
                                             :
-                                                (((bool) (((bool) (guid276 == ((int32_t) 5))) && true)) ? 
+                                                (((bool) (((bool) (guid283 == ((uint8_t) 5))) && true)) ? 
                                                     (([&]() -> CWatch::month {
                                                         return june();
                                                     })())
                                                 :
-                                                    (((bool) (((bool) (guid276 == ((int32_t) 6))) && true)) ? 
+                                                    (((bool) (((bool) (guid283 == ((uint8_t) 6))) && true)) ? 
                                                         (([&]() -> CWatch::month {
                                                             return july();
                                                         })())
                                                     :
-                                                        (((bool) (((bool) (guid276 == ((int32_t) 7))) && true)) ? 
+                                                        (((bool) (((bool) (guid283 == ((uint8_t) 7))) && true)) ? 
                                                             (([&]() -> CWatch::month {
                                                                 return august();
                                                             })())
                                                         :
-                                                            (((bool) (((bool) (guid276 == ((int32_t) 8))) && true)) ? 
+                                                            (((bool) (((bool) (guid283 == ((uint8_t) 8))) && true)) ? 
                                                                 (([&]() -> CWatch::month {
                                                                     return september();
                                                                 })())
                                                             :
-                                                                (((bool) (((bool) (guid276 == ((int32_t) 9))) && true)) ? 
+                                                                (((bool) (((bool) (guid283 == ((uint8_t) 9))) && true)) ? 
                                                                     (([&]() -> CWatch::month {
                                                                         return october();
                                                                     })())
                                                                 :
-                                                                    (((bool) (((bool) (guid276 == ((int32_t) 10))) && true)) ? 
+                                                                    (((bool) (((bool) (guid283 == ((uint8_t) 10))) && true)) ? 
                                                                         (([&]() -> CWatch::month {
                                                                             return november();
                                                                         })())
                                                                     :
-                                                                        (((bool) (((bool) (guid276 == ((int32_t) 11))) && true)) ? 
+                                                                        (((bool) (((bool) (guid283 == ((uint8_t) 11))) && true)) ? 
                                                                             (([&]() -> CWatch::month {
                                                                                 return december();
                                                                             })())
@@ -10042,11 +10685,11 @@ namespace CWatch {
                                                                             :
                                                                                 juniper::quit<CWatch::month>())))))))))))));
                         })()));
-                        (((clockState).get())->day = (bleData).day);
-                        (((clockState).get())->year = (bleData).year);
-                        (((clockState).get())->hours = (bleData).hours);
-                        (((clockState).get())->minutes = (bleData).minutes);
-                        return (((clockState).get())->seconds = (bleData).seconds);
+                        ((clockState).day = (bleData).day);
+                        ((clockState).year = (bleData).year);
+                        ((clockState).hours = (bleData).hours);
+                        ((clockState).minutes = (bleData).minutes);
+                        return ((clockState).seconds = (bleData).seconds);
                     })());
                 }
                 return {};
@@ -10054,45 +10697,45 @@ namespace CWatch {
             return (([&]() -> juniper::unit {
                 if (hasNewDayOfWeek) {
                     (([&]() -> CWatch::dayOfWeek {
-                        juniper::records::recordt_8<uint8_t> guid277 = Ble::readGeneric<juniper::records::recordt_8<uint8_t>>(dayOfWeekCharacterstic);
+                        juniper::records::recordt_8<uint8_t> guid284 = Ble::readGeneric<juniper::records::recordt_8<uint8_t>>(dayOfWeekCharacterstic);
                         if (!(true)) {
                             juniper::quit<juniper::unit>();
                         }
-                        juniper::records::recordt_8<uint8_t> bleData = guid277;
+                        juniper::records::recordt_8<uint8_t> bleData = guid284;
                         
-                        return (((clockState).get())->dayOfWeek = (([&]() -> CWatch::dayOfWeek {
-                            uint8_t guid278 = (bleData).dayOfWeek;
-                            return (((bool) (((bool) (guid278 == ((int32_t) 0))) && true)) ? 
+                        return ((clockState).dayOfWeek = (([&]() -> CWatch::dayOfWeek {
+                            uint8_t guid285 = (bleData).dayOfWeek;
+                            return (((bool) (((bool) (guid285 == ((uint8_t) 0))) && true)) ? 
                                 (([&]() -> CWatch::dayOfWeek {
                                     return sunday();
                                 })())
                             :
-                                (((bool) (((bool) (guid278 == ((int32_t) 1))) && true)) ? 
+                                (((bool) (((bool) (guid285 == ((uint8_t) 1))) && true)) ? 
                                     (([&]() -> CWatch::dayOfWeek {
                                         return monday();
                                     })())
                                 :
-                                    (((bool) (((bool) (guid278 == ((int32_t) 2))) && true)) ? 
+                                    (((bool) (((bool) (guid285 == ((uint8_t) 2))) && true)) ? 
                                         (([&]() -> CWatch::dayOfWeek {
                                             return tuesday();
                                         })())
                                     :
-                                        (((bool) (((bool) (guid278 == ((int32_t) 3))) && true)) ? 
+                                        (((bool) (((bool) (guid285 == ((uint8_t) 3))) && true)) ? 
                                             (([&]() -> CWatch::dayOfWeek {
                                                 return wednesday();
                                             })())
                                         :
-                                            (((bool) (((bool) (guid278 == ((int32_t) 4))) && true)) ? 
+                                            (((bool) (((bool) (guid285 == ((uint8_t) 4))) && true)) ? 
                                                 (([&]() -> CWatch::dayOfWeek {
                                                     return thursday();
                                                 })())
                                             :
-                                                (((bool) (((bool) (guid278 == ((int32_t) 5))) && true)) ? 
+                                                (((bool) (((bool) (guid285 == ((uint8_t) 5))) && true)) ? 
                                                     (([&]() -> CWatch::dayOfWeek {
                                                         return friday();
                                                     })())
                                                 :
-                                                    (((bool) (((bool) (guid278 == ((int32_t) 6))) && true)) ? 
+                                                    (((bool) (((bool) (guid285 == ((uint8_t) 6))) && true)) ? 
                                                         (([&]() -> CWatch::dayOfWeek {
                                                             return saturday();
                                                         })())
@@ -10124,128 +10767,128 @@ namespace Gfx {
 namespace Gfx {
     juniper::unit drawVerticalGradient(int16_t x0i, int16_t y0i, int16_t w, int16_t h, juniper::records::recordt_3<uint8_t, uint8_t, uint8_t> c1, juniper::records::recordt_3<uint8_t, uint8_t, uint8_t> c2) {
         return (([&]() -> juniper::unit {
-            int16_t guid279 = toInt16<uint16_t>(Arcada::displayWidth());
+            int16_t guid286 = toInt16<uint16_t>(Arcada::displayWidth());
             if (!(true)) {
                 juniper::quit<juniper::unit>();
             }
-            int16_t dispW = guid279;
+            int16_t dispW = guid286;
             
-            int16_t guid280 = toInt16<uint16_t>(Arcada::displayHeight());
+            int16_t guid287 = toInt16<uint16_t>(Arcada::displayHeight());
             if (!(true)) {
                 juniper::quit<juniper::unit>();
             }
-            int16_t dispH = guid280;
+            int16_t dispH = guid287;
             
-            int16_t guid281 = Math::clamp<int16_t>(x0i, ((int16_t) 0), ((int16_t) (dispW - ((int16_t) 1))));
+            int16_t guid288 = Math::clamp<int16_t>(x0i, ((int16_t) 0), ((int16_t) (dispW - ((int16_t) 1))));
             if (!(true)) {
                 juniper::quit<juniper::unit>();
             }
-            int16_t x0 = guid281;
+            int16_t x0 = guid288;
             
-            int16_t guid282 = Math::clamp<int16_t>(y0i, ((int16_t) 0), ((int16_t) (dispH - ((int16_t) 1))));
+            int16_t guid289 = Math::clamp<int16_t>(y0i, ((int16_t) 0), ((int16_t) (dispH - ((int16_t) 1))));
             if (!(true)) {
                 juniper::quit<juniper::unit>();
             }
-            int16_t y0 = guid282;
+            int16_t y0 = guid289;
             
-            int16_t guid283 = ((int16_t) (y0i + h));
+            int16_t guid290 = ((int16_t) (y0i + h));
             if (!(true)) {
                 juniper::quit<juniper::unit>();
             }
-            int16_t ymax = guid283;
+            int16_t ymax = guid290;
             
-            int16_t guid284 = Math::clamp<int16_t>(ymax, ((int16_t) 0), dispH);
+            int16_t guid291 = Math::clamp<int16_t>(ymax, ((int16_t) 0), dispH);
             if (!(true)) {
                 juniper::quit<juniper::unit>();
             }
-            int16_t y1 = guid284;
+            int16_t y1 = guid291;
             
-            juniper::records::recordt_3<uint8_t, uint8_t, uint8_t> guid285 = c1;
+            juniper::records::recordt_3<uint8_t, uint8_t, uint8_t> guid292 = c1;
             if (!(true)) {
                 juniper::quit<juniper::unit>();
             }
-            uint8_t b1 = (guid285).b;
-            uint8_t g1 = (guid285).g;
-            uint8_t r1 = (guid285).r;
+            uint8_t b1 = (guid292).b;
+            uint8_t g1 = (guid292).g;
+            uint8_t r1 = (guid292).r;
             
-            juniper::records::recordt_3<uint8_t, uint8_t, uint8_t> guid286 = c2;
+            juniper::records::recordt_3<uint8_t, uint8_t, uint8_t> guid293 = c2;
             if (!(true)) {
                 juniper::quit<juniper::unit>();
             }
-            uint8_t b2 = (guid286).b;
-            uint8_t g2 = (guid286).g;
-            uint8_t r2 = (guid286).r;
+            uint8_t b2 = (guid293).b;
+            uint8_t g2 = (guid293).g;
+            uint8_t r2 = (guid293).r;
             
-            float guid287 = toFloat<uint8_t>(r1);
+            float guid294 = toFloat<uint8_t>(r1);
             if (!(true)) {
                 juniper::quit<juniper::unit>();
             }
-            float r1f = guid287;
+            float r1f = guid294;
             
-            float guid288 = toFloat<uint8_t>(g1);
+            float guid295 = toFloat<uint8_t>(g1);
             if (!(true)) {
                 juniper::quit<juniper::unit>();
             }
-            float g1f = guid288;
+            float g1f = guid295;
             
-            float guid289 = toFloat<uint8_t>(b1);
+            float guid296 = toFloat<uint8_t>(b1);
             if (!(true)) {
                 juniper::quit<juniper::unit>();
             }
-            float b1f = guid289;
+            float b1f = guid296;
             
-            float guid290 = toFloat<uint8_t>(r2);
+            float guid297 = toFloat<uint8_t>(r2);
             if (!(true)) {
                 juniper::quit<juniper::unit>();
             }
-            float r2f = guid290;
+            float r2f = guid297;
             
-            float guid291 = toFloat<uint8_t>(g2);
+            float guid298 = toFloat<uint8_t>(g2);
             if (!(true)) {
                 juniper::quit<juniper::unit>();
             }
-            float g2f = guid291;
+            float g2f = guid298;
             
-            float guid292 = toFloat<uint8_t>(b2);
+            float guid299 = toFloat<uint8_t>(b2);
             if (!(true)) {
                 juniper::quit<juniper::unit>();
             }
-            float b2f = guid292;
+            float b2f = guid299;
             
             return (([&]() -> juniper::unit {
-                int16_t guid293 = y0;
-                int16_t guid294 = y1;
-                for (int16_t y = guid293; y < guid294; y++) {
+                int16_t guid300 = y0;
+                int16_t guid301 = y1;
+                for (int16_t y = guid300; y < guid301; y++) {
                     (([&]() -> juniper::unit {
-                        float guid295 = ((float) (toFloat<int16_t>(((int16_t) (ymax - y))) / toFloat<int16_t>(h)));
+                        float guid302 = ((float) (toFloat<int16_t>(((int16_t) (ymax - y))) / toFloat<int16_t>(h)));
                         if (!(true)) {
                             juniper::quit<juniper::unit>();
                         }
-                        float weight1 = guid295;
+                        float weight1 = guid302;
                         
-                        float guid296 = ((float) (1.0f - weight1));
+                        float guid303 = ((float) (1.0f - weight1));
                         if (!(true)) {
                             juniper::quit<juniper::unit>();
                         }
-                        float weight2 = guid296;
+                        float weight2 = guid303;
                         
-                        juniper::records::recordt_3<uint8_t, uint8_t, uint8_t> guid297 = (([&]() -> juniper::records::recordt_3<uint8_t, uint8_t, uint8_t>{
-                            juniper::records::recordt_3<uint8_t, uint8_t, uint8_t> guid298;
-                            guid298.r = toUInt8<float>(((float) (((float) (r1f * weight1)) + ((float) (r2f * weight2)))));
-                            guid298.g = toUInt8<float>(((float) (((float) (g1f * weight1)) + ((float) (g2f * weight2)))));
-                            guid298.b = toUInt8<float>(((float) (((float) (b1f * weight1)) + ((float) (g2f * weight2)))));
-                            return guid298;
+                        juniper::records::recordt_3<uint8_t, uint8_t, uint8_t> guid304 = (([&]() -> juniper::records::recordt_3<uint8_t, uint8_t, uint8_t>{
+                            juniper::records::recordt_3<uint8_t, uint8_t, uint8_t> guid305;
+                            guid305.r = toUInt8<float>(((float) (((float) (r1f * weight1)) + ((float) (r2f * weight2)))));
+                            guid305.g = toUInt8<float>(((float) (((float) (g1f * weight1)) + ((float) (g2f * weight2)))));
+                            guid305.b = toUInt8<float>(((float) (((float) (b1f * weight1)) + ((float) (g2f * weight2)))));
+                            return guid305;
                         })());
                         if (!(true)) {
                             juniper::quit<juniper::unit>();
                         }
-                        juniper::records::recordt_3<uint8_t, uint8_t, uint8_t> gradColor = guid297;
+                        juniper::records::recordt_3<uint8_t, uint8_t, uint8_t> gradColor = guid304;
                         
-                        uint16_t guid299 = Color::rgbToRgb565(gradColor);
+                        uint16_t guid306 = Color::rgbToRgb565(gradColor);
                         if (!(true)) {
                             juniper::quit<juniper::unit>();
                         }
-                        uint16_t gradColor565 = guid299;
+                        uint16_t gradColor565 = guid306;
                         
                         return drawFastHLine565(x0, y, w, gradColor565);
                     })());
@@ -10257,34 +10900,34 @@ namespace Gfx {
 }
 
 namespace Gfx {
-    template<int c150>
-    juniper::tuple4<int16_t, int16_t, uint16_t, uint16_t> getCharListBounds(int16_t x, int16_t y, juniper::records::recordt_0<juniper::array<uint8_t, (1)+(c150)>, uint32_t> cl) {
+    template<int c229>
+    juniper::tuple4<int16_t, int16_t, uint16_t, uint16_t> getCharListBounds(int16_t x, int16_t y, juniper::records::recordt_0<juniper::array<uint8_t, (1)+(c229)>, uint32_t> cl) {
         return (([&]() -> juniper::tuple4<int16_t, int16_t, uint16_t, uint16_t> {
-            constexpr int32_t n = c150;
+            constexpr int32_t n = c229;
             return (([&]() -> juniper::tuple4<int16_t, int16_t, uint16_t, uint16_t> {
-                int16_t guid300 = ((int16_t) 0);
+                int16_t guid307 = ((int16_t) 0);
                 if (!(true)) {
                     juniper::quit<juniper::unit>();
                 }
-                int16_t xret = guid300;
+                int16_t xret = guid307;
                 
-                int16_t guid301 = ((int16_t) 0);
+                int16_t guid308 = ((int16_t) 0);
                 if (!(true)) {
                     juniper::quit<juniper::unit>();
                 }
-                int16_t yret = guid301;
+                int16_t yret = guid308;
                 
-                uint16_t guid302 = ((uint16_t) 0);
+                uint16_t guid309 = ((uint16_t) 0);
                 if (!(true)) {
                     juniper::quit<juniper::unit>();
                 }
-                uint16_t wret = guid302;
+                uint16_t wret = guid309;
                 
-                uint16_t guid303 = ((uint16_t) 0);
+                uint16_t guid310 = ((uint16_t) 0);
                 if (!(true)) {
                     juniper::quit<juniper::unit>();
                 }
-                uint16_t hret = guid303;
+                uint16_t hret = guid310;
                 
                 (([&]() -> juniper::unit {
                     arcada.getCanvas()->getTextBounds((const char *) &cl.data[0], x, y, &xret, &yret, &wret, &hret);
@@ -10297,10 +10940,10 @@ namespace Gfx {
 }
 
 namespace Gfx {
-    template<int c151>
-    juniper::unit printCharList(juniper::records::recordt_0<juniper::array<uint8_t, (1)+(c151)>, uint32_t> cl) {
+    template<int c230>
+    juniper::unit printCharList(juniper::records::recordt_0<juniper::array<uint8_t, (1)+(c230)>, uint32_t> cl) {
         return (([&]() -> juniper::unit {
-            constexpr int32_t n = c151;
+            constexpr int32_t n = c230;
             return (([&]() -> juniper::unit {
                 arcada.getCanvas()->print((char *) &cl.data[0]);
                 return {};
@@ -10321,8 +10964,8 @@ namespace Gfx {
 namespace Gfx {
     juniper::unit setFont(Gfx::font f) {
         return (([&]() -> juniper::unit {
-            Gfx::font guid304 = f;
-            return (((bool) (((bool) ((guid304).id() == ((uint8_t) 0))) && true)) ? 
+            Gfx::font guid311 = f;
+            return (((bool) (((bool) ((guid311).id() == ((uint8_t) 0))) && true)) ? 
                 (([&]() -> juniper::unit {
                     return (([&]() -> juniper::unit {
                         arcada.getCanvas()->setFont();
@@ -10330,7 +10973,7 @@ namespace Gfx {
                     })());
                 })())
             :
-                (((bool) (((bool) ((guid304).id() == ((uint8_t) 1))) && true)) ? 
+                (((bool) (((bool) ((guid311).id() == ((uint8_t) 1))) && true)) ? 
                     (([&]() -> juniper::unit {
                         return (([&]() -> juniper::unit {
                             arcada.getCanvas()->setFont(&FreeSans9pt7b);
@@ -10338,7 +10981,7 @@ namespace Gfx {
                         })());
                     })())
                 :
-                    (((bool) (((bool) ((guid304).id() == ((uint8_t) 2))) && true)) ? 
+                    (((bool) (((bool) ((guid311).id() == ((uint8_t) 2))) && true)) ? 
                         (([&]() -> juniper::unit {
                             return (([&]() -> juniper::unit {
                                 arcada.getCanvas()->setFont(&FreeSans24pt7b);
@@ -10354,11 +10997,11 @@ namespace Gfx {
 namespace Gfx {
     juniper::unit setTextColor(juniper::records::recordt_3<uint8_t, uint8_t, uint8_t> c) {
         return (([&]() -> juniper::unit {
-            uint16_t guid305 = rgbToRgb565(c);
+            uint16_t guid312 = rgbToRgb565(c);
             if (!(true)) {
                 juniper::quit<juniper::unit>();
             }
-            uint16_t cPrime = guid305;
+            uint16_t cPrime = guid312;
             
             return (([&]() -> juniper::unit {
                 arcada.getCanvas()->setTextColor(cPrime);
@@ -10384,19 +11027,19 @@ namespace CWatch {
             processBluetoothUpdates();
             Signal::sink<juniper::records::recordt_9<uint8_t, CWatch::dayOfWeek, uint8_t, uint8_t, CWatch::month, uint8_t, uint32_t>, void>(juniper::function<void, juniper::unit(juniper::records::recordt_9<uint8_t, CWatch::dayOfWeek, uint8_t, uint8_t, CWatch::month, uint8_t, uint32_t>)>([](juniper::records::recordt_9<uint8_t, CWatch::dayOfWeek, uint8_t, uint8_t, CWatch::month, uint8_t, uint32_t> dt) -> juniper::unit { 
                 return (([&]() -> juniper::unit {
-                    juniper::records::recordt_9<uint8_t, CWatch::dayOfWeek, uint8_t, uint8_t, CWatch::month, uint8_t, uint32_t> guid306 = dt;
+                    juniper::records::recordt_9<uint8_t, CWatch::dayOfWeek, uint8_t, uint8_t, CWatch::month, uint8_t, uint32_t> guid313 = dt;
                     if (!(true)) {
                         juniper::quit<juniper::unit>();
                     }
-                    CWatch::dayOfWeek dayOfWeek = (guid306).dayOfWeek;
-                    uint8_t seconds = (guid306).seconds;
-                    uint8_t minutes = (guid306).minutes;
-                    uint8_t hours = (guid306).hours;
-                    uint32_t year = (guid306).year;
-                    uint8_t day = (guid306).day;
-                    CWatch::month month = (guid306).month;
+                    CWatch::dayOfWeek dayOfWeek = (guid313).dayOfWeek;
+                    uint8_t seconds = (guid313).seconds;
+                    uint8_t minutes = (guid313).minutes;
+                    uint8_t hours = (guid313).hours;
+                    uint32_t year = (guid313).year;
+                    uint8_t day = (guid313).day;
+                    CWatch::month month = (guid313).month;
                     
-                    int32_t guid307 = toInt32<uint8_t>((((bool) (hours == ((uint8_t) 0))) ? 
+                    int32_t guid314 = toInt32<uint8_t>((((bool) (hours == ((uint8_t) 0))) ? 
                         ((uint8_t) 12)
                     :
                         (((bool) (hours > ((uint8_t) 12))) ? 
@@ -10406,109 +11049,109 @@ namespace CWatch {
                     if (!(true)) {
                         juniper::quit<juniper::unit>();
                     }
-                    int32_t displayHours = guid307;
+                    int32_t displayHours = guid314;
                     
                     Gfx::setTextColor(Color::white);
                     Gfx::setFont(Gfx::freeSans24());
                     Gfx::setTextSize(((uint8_t) 1));
-                    juniper::records::recordt_0<juniper::array<uint8_t, 3>, uint32_t> guid308 = CharList::i32ToCharList<2>(displayHours);
+                    juniper::records::recordt_0<juniper::array<uint8_t, 3>, uint32_t> guid315 = CharList::i32ToCharList<2>(displayHours);
                     if (!(true)) {
                         juniper::quit<juniper::unit>();
                     }
-                    juniper::records::recordt_0<juniper::array<uint8_t, 3>, uint32_t> timeHourStr = guid308;
+                    juniper::records::recordt_0<juniper::array<uint8_t, 3>, uint32_t> timeHourStr = guid315;
                     
-                    juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t> guid309 = CharList::safeConcat<2, 1>(timeHourStr, (([&]() -> juniper::records::recordt_0<juniper::array<uint8_t, 2>, uint32_t>{
-                        juniper::records::recordt_0<juniper::array<uint8_t, 2>, uint32_t> guid310;
-                        guid310.data = (juniper::array<uint8_t, 2> { {((uint8_t) 58), ((uint8_t) 0)} });
-                        guid310.length = ((uint32_t) 2);
-                        return guid310;
+                    juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t> guid316 = CharList::safeConcat<2, 1>(timeHourStr, (([&]() -> juniper::records::recordt_0<juniper::array<uint8_t, 2>, uint32_t>{
+                        juniper::records::recordt_0<juniper::array<uint8_t, 2>, uint32_t> guid317;
+                        guid317.data = (juniper::array<uint8_t, 2> { {((uint8_t) 58), ((uint8_t) 0)} });
+                        guid317.length = ((uint32_t) 2);
+                        return guid317;
                     })()));
                     if (!(true)) {
                         juniper::quit<juniper::unit>();
                     }
-                    juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t> timeHourStrColon = guid309;
+                    juniper::records::recordt_0<juniper::array<uint8_t, 4>, uint32_t> timeHourStrColon = guid316;
                     
-                    juniper::records::recordt_0<juniper::array<uint8_t, 3>, uint32_t> guid311 = (((bool) (minutes < ((uint8_t) 10))) ? 
+                    juniper::records::recordt_0<juniper::array<uint8_t, 3>, uint32_t> guid318 = (((bool) (minutes < ((uint8_t) 10))) ? 
                         CharList::safeConcat<1, 1>((([&]() -> juniper::records::recordt_0<juniper::array<uint8_t, 2>, uint32_t>{
-                            juniper::records::recordt_0<juniper::array<uint8_t, 2>, uint32_t> guid312;
-                            guid312.data = (juniper::array<uint8_t, 2> { {((uint8_t) 48), ((uint8_t) 0)} });
-                            guid312.length = ((uint32_t) 2);
-                            return guid312;
+                            juniper::records::recordt_0<juniper::array<uint8_t, 2>, uint32_t> guid319;
+                            guid319.data = (juniper::array<uint8_t, 2> { {((uint8_t) 48), ((uint8_t) 0)} });
+                            guid319.length = ((uint32_t) 2);
+                            return guid319;
                         })()), CharList::i32ToCharList<1>(toInt32<uint8_t>(minutes)))
                     :
                         CharList::i32ToCharList<2>(toInt32<uint8_t>(minutes)));
                     if (!(true)) {
                         juniper::quit<juniper::unit>();
                     }
-                    juniper::records::recordt_0<juniper::array<uint8_t, 3>, uint32_t> minutesStr = guid311;
+                    juniper::records::recordt_0<juniper::array<uint8_t, 3>, uint32_t> minutesStr = guid318;
                     
-                    juniper::records::recordt_0<juniper::array<uint8_t, 6>, uint32_t> guid313 = CharList::safeConcat<3, 2>(timeHourStrColon, minutesStr);
+                    juniper::records::recordt_0<juniper::array<uint8_t, 6>, uint32_t> guid320 = CharList::safeConcat<3, 2>(timeHourStrColon, minutesStr);
                     if (!(true)) {
                         juniper::quit<juniper::unit>();
                     }
-                    juniper::records::recordt_0<juniper::array<uint8_t, 6>, uint32_t> timeStr = guid313;
+                    juniper::records::recordt_0<juniper::array<uint8_t, 6>, uint32_t> timeStr = guid320;
                     
-                    juniper::tuple4<int16_t, int16_t, uint16_t, uint16_t> guid314 = Gfx::getCharListBounds<5>(((int16_t) 0), ((int16_t) 0), timeStr);
+                    juniper::tuple4<int16_t, int16_t, uint16_t, uint16_t> guid321 = Gfx::getCharListBounds<5>(((int16_t) 0), ((int16_t) 0), timeStr);
                     if (!(true)) {
                         juniper::quit<juniper::unit>();
                     }
-                    uint16_t h = (guid314).e4;
-                    uint16_t w = (guid314).e3;
+                    uint16_t h = (guid321).e4;
+                    uint16_t w = (guid321).e3;
                     
                     Gfx::setCursor(toInt16<uint16_t>(((uint16_t) (((uint16_t) (Arcada::displayWidth() / ((uint16_t) 2))) - ((uint16_t) (w / ((uint16_t) 2)))))), toInt16<uint16_t>(((uint16_t) (((uint16_t) (Arcada::displayHeight() / ((uint16_t) 2))) + ((uint16_t) (h / ((uint16_t) 2)))))));
                     Gfx::printCharList<5>(timeStr);
                     Gfx::setTextSize(((uint8_t) 1));
                     Gfx::setFont(Gfx::freeSans9());
-                    juniper::records::recordt_0<juniper::array<uint8_t, 3>, uint32_t> guid315 = (((bool) (hours < ((uint8_t) 12))) ? 
+                    juniper::records::recordt_0<juniper::array<uint8_t, 3>, uint32_t> guid322 = (((bool) (hours < ((uint8_t) 12))) ? 
                         (([&]() -> juniper::records::recordt_0<juniper::array<uint8_t, 3>, uint32_t>{
-                            juniper::records::recordt_0<juniper::array<uint8_t, 3>, uint32_t> guid316;
-                            guid316.data = (juniper::array<uint8_t, 3> { {((uint8_t) 65), ((uint8_t) 77), ((uint8_t) 0)} });
-                            guid316.length = ((uint32_t) 3);
-                            return guid316;
+                            juniper::records::recordt_0<juniper::array<uint8_t, 3>, uint32_t> guid323;
+                            guid323.data = (juniper::array<uint8_t, 3> { {((uint8_t) 65), ((uint8_t) 77), ((uint8_t) 0)} });
+                            guid323.length = ((uint32_t) 3);
+                            return guid323;
                         })())
                     :
                         (([&]() -> juniper::records::recordt_0<juniper::array<uint8_t, 3>, uint32_t>{
-                            juniper::records::recordt_0<juniper::array<uint8_t, 3>, uint32_t> guid317;
-                            guid317.data = (juniper::array<uint8_t, 3> { {((uint8_t) 80), ((uint8_t) 77), ((uint8_t) 0)} });
-                            guid317.length = ((uint32_t) 3);
-                            return guid317;
+                            juniper::records::recordt_0<juniper::array<uint8_t, 3>, uint32_t> guid324;
+                            guid324.data = (juniper::array<uint8_t, 3> { {((uint8_t) 80), ((uint8_t) 77), ((uint8_t) 0)} });
+                            guid324.length = ((uint32_t) 3);
+                            return guid324;
                         })()));
                     if (!(true)) {
                         juniper::quit<juniper::unit>();
                     }
-                    juniper::records::recordt_0<juniper::array<uint8_t, 3>, uint32_t> ampm = guid315;
+                    juniper::records::recordt_0<juniper::array<uint8_t, 3>, uint32_t> ampm = guid322;
                     
-                    juniper::tuple4<int16_t, int16_t, uint16_t, uint16_t> guid318 = Gfx::getCharListBounds<2>(((int16_t) 0), ((int16_t) 0), ampm);
+                    juniper::tuple4<int16_t, int16_t, uint16_t, uint16_t> guid325 = Gfx::getCharListBounds<2>(((int16_t) 0), ((int16_t) 0), ampm);
                     if (!(true)) {
                         juniper::quit<juniper::unit>();
                     }
-                    uint16_t h2 = (guid318).e4;
-                    uint16_t w2 = (guid318).e3;
+                    uint16_t h2 = (guid325).e4;
+                    uint16_t w2 = (guid325).e3;
                     
                     Gfx::setCursor(toInt16<uint16_t>(((uint16_t) (((uint16_t) (Arcada::displayWidth() / ((uint16_t) 2))) - ((uint16_t) (w2 / ((uint16_t) 2)))))), toInt16<uint16_t>(((uint16_t) (((uint16_t) (((uint16_t) (((uint16_t) (Arcada::displayHeight() / ((uint16_t) 2))) + ((uint16_t) (h / ((uint16_t) 2))))) + h2)) + ((uint16_t) 5)))));
                     Gfx::printCharList<2>(ampm);
-                    juniper::records::recordt_0<juniper::array<uint8_t, 12>, uint32_t> guid319 = CharList::safeConcat<9, 2>(CharList::safeConcat<8, 1>(CharList::safeConcat<5, 3>(CharList::safeConcat<3, 2>(dayOfWeekToCharList(dayOfWeek), (([&]() -> juniper::records::recordt_0<juniper::array<uint8_t, 3>, uint32_t>{
-                        juniper::records::recordt_0<juniper::array<uint8_t, 3>, uint32_t> guid320;
-                        guid320.data = (juniper::array<uint8_t, 3> { {((uint8_t) 44), ((uint8_t) 32), ((uint8_t) 0)} });
-                        guid320.length = ((uint32_t) 3);
-                        return guid320;
+                    juniper::records::recordt_0<juniper::array<uint8_t, 12>, uint32_t> guid326 = CharList::safeConcat<9, 2>(CharList::safeConcat<8, 1>(CharList::safeConcat<5, 3>(CharList::safeConcat<3, 2>(dayOfWeekToCharList(dayOfWeek), (([&]() -> juniper::records::recordt_0<juniper::array<uint8_t, 3>, uint32_t>{
+                        juniper::records::recordt_0<juniper::array<uint8_t, 3>, uint32_t> guid327;
+                        guid327.data = (juniper::array<uint8_t, 3> { {((uint8_t) 44), ((uint8_t) 32), ((uint8_t) 0)} });
+                        guid327.length = ((uint32_t) 3);
+                        return guid327;
                     })())), monthToCharList(month)), (([&]() -> juniper::records::recordt_0<juniper::array<uint8_t, 2>, uint32_t>{
-                        juniper::records::recordt_0<juniper::array<uint8_t, 2>, uint32_t> guid321;
-                        guid321.data = (juniper::array<uint8_t, 2> { {((uint8_t) 32), ((uint8_t) 0)} });
-                        guid321.length = ((uint32_t) 2);
-                        return guid321;
+                        juniper::records::recordt_0<juniper::array<uint8_t, 2>, uint32_t> guid328;
+                        guid328.data = (juniper::array<uint8_t, 2> { {((uint8_t) 32), ((uint8_t) 0)} });
+                        guid328.length = ((uint32_t) 2);
+                        return guid328;
                     })())), CharList::i32ToCharList<2>(toInt32<uint8_t>(day)));
                     if (!(true)) {
                         juniper::quit<juniper::unit>();
                     }
-                    juniper::records::recordt_0<juniper::array<uint8_t, 12>, uint32_t> dateStr = guid319;
+                    juniper::records::recordt_0<juniper::array<uint8_t, 12>, uint32_t> dateStr = guid326;
                     
-                    juniper::tuple4<int16_t, int16_t, uint16_t, uint16_t> guid322 = Gfx::getCharListBounds<11>(((int16_t) 0), ((int16_t) 0), dateStr);
+                    juniper::tuple4<int16_t, int16_t, uint16_t, uint16_t> guid329 = Gfx::getCharListBounds<11>(((int16_t) 0), ((int16_t) 0), dateStr);
                     if (!(true)) {
                         juniper::quit<juniper::unit>();
                     }
-                    uint16_t h3 = (guid322).e4;
-                    uint16_t w3 = (guid322).e3;
+                    uint16_t h3 = (guid329).e4;
+                    uint16_t w3 = (guid329).e3;
                     
                     Gfx::setCursor(cast<uint16_t, int16_t>(((uint16_t) (((uint16_t) (Arcada::displayWidth() / ((uint16_t) 2))) - ((uint16_t) (w3 / ((uint16_t) 2)))))), cast<uint16_t, int16_t>(((uint16_t) (((uint16_t) (((uint16_t) (Arcada::displayHeight() / ((uint16_t) 2))) - ((uint16_t) (h / ((uint16_t) 2))))) - ((uint16_t) 5)))));
                     return Gfx::printCharList<11>(dateStr);
@@ -10524,11 +11167,11 @@ namespace CWatch {
 namespace Gfx {
     juniper::unit fillScreen(juniper::records::recordt_3<uint8_t, uint8_t, uint8_t> c) {
         return (([&]() -> juniper::unit {
-            uint16_t guid323 = rgbToRgb565(c);
+            uint16_t guid330 = rgbToRgb565(c);
             if (!(true)) {
                 juniper::quit<juniper::unit>();
             }
-            uint16_t cPrime = guid323;
+            uint16_t cPrime = guid330;
             
             return (([&]() -> juniper::unit {
                 arcada.getCanvas()->fillScreen(cPrime);
@@ -10541,11 +11184,11 @@ namespace Gfx {
 namespace Gfx {
     juniper::unit drawPixel(int16_t x, int16_t y, juniper::records::recordt_3<uint8_t, uint8_t, uint8_t> c) {
         return (([&]() -> juniper::unit {
-            uint16_t guid324 = rgbToRgb565(c);
+            uint16_t guid331 = rgbToRgb565(c);
             if (!(true)) {
                 juniper::quit<juniper::unit>();
             }
-            uint16_t cPrime = guid324;
+            uint16_t cPrime = guid331;
             
             return (([&]() -> juniper::unit {
                 arcada.getCanvas()->drawPixel(x, y, cPrime);
@@ -10574,43 +11217,43 @@ namespace Gfx {
 }
 
 namespace Gfx {
-    template<int c176>
-    juniper::unit centerCursor(int16_t x, int16_t y, Gfx::align align, juniper::records::recordt_0<juniper::array<uint8_t, c176>, uint32_t> cl) {
+    template<int c255>
+    juniper::unit centerCursor(int16_t x, int16_t y, Gfx::align align, juniper::records::recordt_0<juniper::array<uint8_t, c255>, uint32_t> cl) {
         return (([&]() -> juniper::unit {
-            constexpr int32_t n = c176;
+            constexpr int32_t n = c255;
             return (([&]() -> juniper::unit {
-                juniper::tuple4<int16_t, int16_t, uint16_t, uint16_t> guid325 = Gfx::getCharListBounds<(-1)+(c176)>(((int16_t) 0), ((int16_t) 0), cl);
+                juniper::tuple4<int16_t, int16_t, uint16_t, uint16_t> guid332 = Gfx::getCharListBounds<(-1)+(c255)>(((int16_t) 0), ((int16_t) 0), cl);
                 if (!(true)) {
                     juniper::quit<juniper::unit>();
                 }
-                uint16_t h = (guid325).e4;
-                uint16_t w = (guid325).e3;
+                uint16_t h = (guid332).e4;
+                uint16_t w = (guid332).e3;
                 
-                int16_t guid326 = toInt16<uint16_t>(w);
+                int16_t guid333 = toInt16<uint16_t>(w);
                 if (!(true)) {
                     juniper::quit<juniper::unit>();
                 }
-                int16_t ws = guid326;
+                int16_t ws = guid333;
                 
-                int16_t guid327 = toInt16<uint16_t>(h);
+                int16_t guid334 = toInt16<uint16_t>(h);
                 if (!(true)) {
                     juniper::quit<juniper::unit>();
                 }
-                int16_t hs = guid327;
+                int16_t hs = guid334;
                 
                 return (([&]() -> juniper::unit {
-                    Gfx::align guid328 = align;
-                    return (((bool) (((bool) ((guid328).id() == ((uint8_t) 0))) && true)) ? 
+                    Gfx::align guid335 = align;
+                    return (((bool) (((bool) ((guid335).id() == ((uint8_t) 0))) && true)) ? 
                         (([&]() -> juniper::unit {
                             return Gfx::setCursor(((int16_t) (x - ((int16_t) (ws / ((int16_t) 2))))), y);
                         })())
                     :
-                        (((bool) (((bool) ((guid328).id() == ((uint8_t) 1))) && true)) ? 
+                        (((bool) (((bool) ((guid335).id() == ((uint8_t) 1))) && true)) ? 
                             (([&]() -> juniper::unit {
                                 return Gfx::setCursor(x, ((int16_t) (y - ((int16_t) (hs / ((int16_t) 2))))));
                             })())
                         :
-                            (((bool) (((bool) ((guid328).id() == ((uint8_t) 2))) && true)) ? 
+                            (((bool) (((bool) ((guid335).id() == ((uint8_t) 2))) && true)) ? 
                                 (([&]() -> juniper::unit {
                                     return Gfx::setCursor(((int16_t) (x - ((int16_t) (ws / ((int16_t) 2))))), ((int16_t) (y - ((int16_t) (hs / ((int16_t) 2))))));
                                 })())
