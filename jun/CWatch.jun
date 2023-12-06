@@ -41,16 +41,7 @@ let dayOfWeekCharacterstic = {
     Ble:characterstic(p)
 }
 
-fun test() = {
-    var myPtr : ptr
-    #myPtr = (void *) new int(10);#
-    makerc(myPtr, (p) => #delete ((int *) p);#)
-}
-
-let foo = ref 0u32
-
 fun setup() = {
-    *foo = 10
     Arcada:arcadaBegin()
     Arcada:displayBegin()
     Arcada:setBacklight(255)
@@ -81,6 +72,9 @@ fun setup() = {
     Ble:bluefruitAdvertisingSetInterval(32u16, 244u16)
     Ble:bluefruitAdvertisingSetFastTimeout(30u16)
     Ble:bluefruitAdvertisingStart(0u16)
+
+    Io:setPinMode(whiteLED, Io:output())
+    Io:digWrite(whiteLED, Io:low())
 }
 
 let pink : Color:rgb = {r:=0xFCu8, g:=0x5Cu8, b:=0x7Du8}
@@ -208,9 +202,6 @@ fun secondTick(d : datetime) = {
     {month := month2, day := day2, year := year2, hours := hours2, minutes := minutes2, seconds := seconds2, dayOfWeek := dayOfWeek2}
 }
 
-let mut clockTickerState = Time:state
-let mut clockState = {month := september(), day := 9, year := 2020, hours := 18, minutes := 40, seconds := 0, dayOfWeek := wednesday()} : datetime
-
 fun processBluetoothUpdates() = {
     let mut hasNewDayDateTime = false
     let mut hasNewDayOfWeek = false
@@ -263,80 +254,143 @@ fun processBluetoothUpdates() = {
     }
 }
 
+type watchModeT = time() | flashlight()
+type flashlightStateT = flashlightOn() | flashlightOff()
+
+let mut clockTickerState = Time:state
+let mut clockState = {month := september(), day := 9, year := 2020, hours := 18, minutes := 40, seconds := 0, dayOfWeek := wednesday()} : datetime
+let mut modeButtonAState = Io:low()
+let mut modeButtonBState = Io:low()
+let mut watchMode = time()
+let mut flashlightState = flashlightOff()
+
+fun drawTime() = {
+    let {month := month, day := day, year := year, hours := hours, minutes := minutes, seconds := seconds, dayOfWeek := dayOfWeek} = clockState
+
+    // Convert 24 hour format to 12 hour format
+    let displayHours : int32 = toInt32(
+        if (hours == 0u8)
+            12u8
+        else if (hours > 12u8)
+            hours - 12u8
+        else
+            hours)
+
+    Gfx:setTextColor(Color:white)
+
+    Gfx:setFont(Gfx:freeSans24())
+    Gfx:setTextSize(1)
+    
+    // Construct the hours:minutes string
+    let timeHourStr : charlist<2> = CharList:i32ToCharList(displayHours)
+    let timeHourStrColon = CharList:safeConcat(timeHourStr, ':')
+    let minutesStr : charlist<2> =
+        if (minutes < 10u8)
+            CharList:safeConcat('0', CharList:i32ToCharList(toInt32(minutes)))
+        else
+            CharList:i32ToCharList(toInt32(minutes))
+    let timeStr = CharList:safeConcat(timeHourStrColon, minutesStr)
+
+    // Move the cursor to the center of the screen
+    let (_, _, w, h) = Gfx:getCharListBounds(0, 0, timeStr)
+    Gfx:setCursor(toInt16((Arcada:displayWidth() / 2) - (w / 2)), toInt16((Arcada:displayHeight() / 2) + (h / 2)))
+    
+    // Print the time
+    Gfx:printCharList(timeStr)
+
+    Gfx:setTextSize(1)
+    Gfx:setFont(Gfx:freeSans9())
+
+    // Determine if we are in AM or PM
+    let ampm =
+        if (hours < 12u8)
+            'AM'
+        else
+            'PM'
+    
+    // Print the AM or PM
+    let (_, _, w2, h2) = Gfx:getCharListBounds(0, 0, ampm)
+    Gfx:setCursor(toInt16((Arcada:displayWidth() / 2) - (w2 / 2)), toInt16((Arcada:displayHeight() / 2) + (h / 2) + h2 + 5))
+    Gfx:printCharList(ampm)
+
+    // Construct the day of week, month day string
+    // Example: Sun Apr 31
+    let dateStr =
+        CharList:safeConcat(
+        CharList:safeConcat(
+        CharList:safeConcat(
+        CharList:safeConcat(
+            dayOfWeekToCharList(dayOfWeek), ', '),
+            monthToCharList(month)),
+            ' '),
+            CharList:i32ToCharList(toInt32(day)) : charlist<2>)
+
+    // Draw the day string above the time
+    let (_, _, w3, h3) = Gfx:getCharListBounds(0, 0, dateStr)
+    Gfx:setCursor(cast((Arcada:displayWidth() / 2) - (w3 / 2)), cast((Arcada:displayHeight() / 2) - (h / 2) - 5))
+    Gfx:printCharList(dateStr)
+}
+
+fun drawFlashlight() = {
+    let centerX = Arcada:displayWidth() / 2
+    let centerY = Arcada:displayHeight() / 2
+    let radius = 20
+    match flashlightState {
+        flashlightOn() => Gfx:fillCircle(centerX, centerY, radius, Color:white)
+        flashlightOff() => Gfx:drawCircle(centerX, centerY, radius, Color:white)
+    }   
+}
+
+let whiteLED : uint16 = 43
+
 fun loop() = {
     Gfx:drawVerticalGradient(0i16, 0i16, toInt16(Arcada:displayWidth()), toInt16(Arcada:displayHeight()), pink, purpleBlue)
 
     processBluetoothUpdates()
 
+    // Update the clock every second
     Time:every(1000u32, inout clockTickerState) |>
-    Signal:foldP((t, dt) => secondTick(dt), inout clockState) |>
-    Signal:latch(inout clockState) |>
-    Signal:sink((dt) => {
-        let {month := month, day := day, year := year, hours := hours, minutes := minutes, seconds := seconds, dayOfWeek := dayOfWeek} = dt
+    Signal:foldP((t, dt) => secondTick(dt), inout clockState)
 
-        // Convert 24 hour format to 12 hour format
-        let displayHours : int32 = toInt32(
-            if (hours == 0u8)
-                12u8
-            else if (hours > 12u8)
-                hours - 12u8
-            else
-                hours)
-
-        Gfx:setTextColor(Color:white)
-
-        Gfx:setFont(Gfx:freeSans24())
-        Gfx:setTextSize(1)
-        
-        // Construct the hours:minutes string
-        let timeHourStr : charlist<2> = CharList:i32ToCharList(displayHours)
-        let timeHourStrColon = CharList:safeConcat(timeHourStr, ':')
-        let minutesStr : charlist<2> =
-            if (minutes < 10u8)
-                CharList:safeConcat('0', CharList:i32ToCharList(toInt32(minutes)))
-            else
-                CharList:i32ToCharList(toInt32(minutes))
-        let timeStr = CharList:safeConcat(timeHourStrColon, minutesStr)
-
-        // Move the cursor to the center of the screen
-        let (_, _, w, h) = Gfx:getCharListBounds(0, 0, timeStr)
-        Gfx:setCursor(toInt16((Arcada:displayWidth() / 2) - (w / 2)), toInt16((Arcada:displayHeight() / 2) + (h / 2)))
-        
-        // Print the time
-        Gfx:printCharList(timeStr)
-
-        Gfx:setTextSize(1)
-        Gfx:setFont(Gfx:freeSans9())
-
-        // Determine if we are in AM or PM
-        let ampm =
-            if (hours < 12u8)
-                'AM'
-            else
-                'PM'
-        
-        // Print the AM or PM
-        let (_, _, w2, h2) = Gfx:getCharListBounds(0, 0, ampm)
-        Gfx:setCursor(toInt16((Arcada:displayWidth() / 2) - (w2 / 2)), toInt16((Arcada:displayHeight() / 2) + (h / 2) + h2 + 5))
-        Gfx:printCharList(ampm)
-
-        // Construct the day of week, month day string
-        // Example: Sun Apr 31
-        let dateStr =
-            CharList:safeConcat(
-            CharList:safeConcat(
-            CharList:safeConcat(
-            CharList:safeConcat(
-                dayOfWeekToCharList(dayOfWeek), ', '),
-                monthToCharList(month)),
-                ' '),
-                CharList:i32ToCharList(toInt32(day)) : charlist<2>)
-
-        // Draw the day string above the time
-        let (_, _, w3, h3) = Gfx:getCharListBounds(0, 0, dateStr)
-        Gfx:setCursor(cast((Arcada:displayWidth() / 2) - (w3 / 2)), cast((Arcada:displayHeight() / 2) - (h / 2) - 5))
-        Gfx:printCharList(dateStr)
-    })
+    // Update the mode based upon button B press
+    let buttonBSig = Arcada:readButtonB()
+    Io:risingEdge(buttonBSig, inout modeButtonBState) |>
+    Signal:foldP(
+        (u, prevMode) =>
+            match prevMode {
+                time() => flashlight()
+                flashlight() => time()
+            },
+        inout watchMode)
+    
+    // Based on the watch mode, either...
+    match watchMode {
+        time() =>
+            // Draw the time
+            drawTime()
+        flashlight() => {
+            // or get the button A for turning the flash light on and off
+            let buttonASig = Arcada:readButtonA()
+            Io:risingEdge(buttonASig, inout modeButtonAState) |>
+            Signal:foldP(
+                (u, prevState) =>
+                    match prevState {
+                        flashlightOn() => flashlightOff()
+                        flashlightOff() => flashlightOn()
+                    },
+                inout flashlightState
+            ) |>
+            Signal:sink(
+                (fs) =>
+                    match fs {
+                        flashlightOn() => Io:digWrite(whiteLED, Io:high())
+                        flashlightOff() => Io:digWrite(whiteLED, Io:low())
+                    }
+            )
+            // and draw the flashlight state to the screen
+            drawFlashlight()
+        }
+    }
 
     Arcada:blitDoubleBuffer()
 }

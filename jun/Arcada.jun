@@ -40,3 +40,20 @@ fun blitDoubleBuffer() : bool = {
     #ret = arcada.blitFrameBuffer(0, 0, true, false);#
     ret
 }
+
+fun readButtons(buttonMask : uint8) : sig<Io:pinState> = {
+    var pressedButtons : uint8
+    #pressedButtons = arcada.readButtons();#
+    signal(just(
+        if (pressedButtons & buttonMask) == 0
+            Io:low()
+        else
+            Io:high()
+    ))
+}
+
+let JUN_ARCADA_BUTTONMASK_A = 0x1u8
+let JUN_ARCADA_BUTTONMASK_B = 0x2u8
+
+fun readButtonA() = readButtons(JUN_ARCADA_BUTTONMASK_A)
+fun readButtonB() = readButtons(JUN_ARCADA_BUTTONMASK_B)

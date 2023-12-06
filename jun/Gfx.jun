@@ -97,3 +97,13 @@ fun drawVerticalGradient(x0i : int16, y0i : int16, w : int16, h : int16, c1 : Co
         drawFastHLine565(x0, y, w, gradColor565)
     }
 }
+
+fun fillCircle(x0 : uint16, y0 : uint16, r : uint16, c : Color:rgb) = {
+    let c2 = Color:rgbToRgb565(c)
+    #arcada.getCanvas()->fillCircle(x0, y0, r, c2);#
+}
+
+fun drawCircle(x0 : uint16, y0 : uint16, r : uint16, c : Color:rgb) = {
+    let c2 = Color:rgbToRgb565(c)
+    #arcada.getCanvas()->drawCircle(x0, y0, r, c2);#
+}
